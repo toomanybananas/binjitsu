@@ -1,13 +1,8 @@
 #!/usr/bin/env python2
-import argparse, sys, os, types
-import pwnlib
-from pwnlib import util
-import pwnlib.term.text as text
-from pwnlib.context import context
-from pwnlib.log import getLogger, install_default_handler
-install_default_handler()
+import argparse, types
+from pwn import *
 
-log = getLogger('pwnlib.commandline.shellcraft')
+log = getLogger(__name__)
 
 r = text.red
 g = text.green
@@ -45,7 +40,7 @@ def _carray(s):
     return '{' + ', '.join(out) + '};\n'
 
 def _hex(s):
-    return pwnlib.util.fiddling.enhex(s) + '\n'
+    return enhex(s) + '\n'
 
 p = argparse.ArgumentParser(
     description = 'Microwave shellcode -- Easy, fast and delicious',
@@ -116,7 +111,7 @@ def get_tree(path, val, result):
         return result
 
 # Enumearte all of the shellcode names
-all_shellcodes = get_tree('', pwnlib.shellcraft, [])
+all_shellcodes = get_tree('', shellcraft, [])
 names = '\n'.join('    ' + sc[0] for sc in all_shellcodes)
 
 p.add_argument(
@@ -151,7 +146,7 @@ def main():
             args.format = 'raw'
 
 
-    vals = get_tree('', pwnlib.shellcraft, [])
+    vals = get_tree('', shellcraft, [])
     if args.shellcode:
         vals = [(k, val) for k, val in vals if k.startswith(args.shellcode + '.') or k == args.shellcode]
 
@@ -242,10 +237,10 @@ def main():
         print code
         exit()
     if args.format == 'p':
-        print pwnlib.asm.cpp(code, arch = arch, os = os)
+        print cpp(code, arch = arch, os = os)
         exit()
 
-    code = pwnlib.asm.asm(code, arch = arch, os = os)
+    code = asm(code, arch = arch, os = os)
 
     if args.format in ['s', 'str', 'string']:
         code = _string(code)
@@ -254,7 +249,7 @@ def main():
     elif args.format in ['h', 'hex']:
         code = _hex(code)
     elif args.format in ['i', 'hexii']:
-        code = pwnlib.util.fiddling.hexii(code) + '\n'
+        code = hexii(code) + '\n'
 
     if not sys.stdin.isatty():
         sys.stdout.write(sys.stdin.read())

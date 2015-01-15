@@ -1,12 +1,7 @@
 #!/usr/bin/env python2
-
 import argparse, sys
-from pwnlib.asm           import asm
-from pwnlib.context       import context
-from pwnlib.util.fiddling import enhex
-
-import pwnlib.log
-pwnlib.log.install_default_handler()
+from pwn import *
+log = getLogger(__name__)
 
 parser = argparse.ArgumentParser(
     description = 'Assemble shellcode into bytes'

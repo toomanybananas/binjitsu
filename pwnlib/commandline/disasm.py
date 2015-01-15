@@ -1,11 +1,9 @@
 #!/usr/bin/env python2
-import argparse, sys
-from pwnlib import asm
-from pwnlib.context import context
+import argparse
 from string import whitespace, hexdigits
 
-import pwnlib.log
-pwnlib.log.install_default_handler()
+from pwn import *
+log = getLogger(__name__)
 
 parser = argparse.ArgumentParser(
     description = 'Disassemble bytes into text format'
