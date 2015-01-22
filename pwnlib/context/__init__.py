@@ -4,7 +4,7 @@
 Implements context management so that nested/scoped contexts and threaded
 contexts work properly and as expected.
 """
-import threading, collections, string, logging
+import threading, collections, string, logging, tempfile, os
 from ..timeout import Timeout
 
 class _defaultdict(dict):
@@ -302,6 +302,7 @@ class ContextType(object):
     defaults = {
         'arch': 'i386',
         'bits': 32,
+        'cache': os.path.join(tempfile.gettempdir(), 'pwntools-cache'),
         'endian': 'little',
         'log_level': logging.INFO,
         'newline': '\n',
@@ -626,10 +627,17 @@ class ContextType(object):
             AttributeError: bits must be >= 0 (0)
         """
         return self.bits/8
+
     @bytes.setter
     def bytes(self, value):
         self.bits = value*8
 
+    @_validator
+    def cache(self, value):
+        if value is not None:
+            value = os.path.abspath(value)
+            os.makedirs(value)
+        return value
 
     @_validator
     def endian(self, endianness):

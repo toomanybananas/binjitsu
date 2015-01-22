@@ -1,79 +1,73 @@
-import os
+import os, threading
 from collections import defaultdict
+from ..context import context
+from mako.lookup import TemplateLookup
+from mako.parsetree import Tag, Text
+from mako import ast
 
 __all__ = ['make_function']
 
 loaded = {}
 lookup = None
-def init_mako():
-    global lookup, render_global
-    from mako.lookup import TemplateLookup
-    from mako.parsetree import Tag, Text
-    from mako import ast
-    import threading
 
-    if lookup != None:
-        return
+class NestedTemplateNewlineHandler(threading.local):
+    """
+    When shellcode templates are invoked directly, we want them
+    to be terminated with a newline.
 
-    class IsInsideManager:
-        def __init__(self, parent):
-            self.parent = parent
-        def __enter__(self):
-            self.oldval = self.parent.is_inside
-            self.parent.is_inside = True
-            return self.oldval
-        def __exit__(self, *args):
-            self.parent.is_inside = self.oldval
+    When shellcode templates are invoked by other shellcode templates,
+    we don't want this behavior to occur.  This is for several reasons,
+    including keeping assembly code compact, and permitting the current
+    use of labels as ``${label}:``.
+    """
+    nest = 0
+    def __enter__(self):
+        append = '' if nest else '\n'
+        self.nest += 1
+        return append
+    def __exit__(self, *a):
+        self.nest -= 1
 
-    class IsInside(threading.local):
-        is_inside = False
+nester = NestedTemplateNewlineHandler
 
-        def go_inside(self):
-            return IsInsideManager(self)
+class pwn_docstring(Tag):
+    """
+    Defines a new tag which Mako will interpret for docstrings.
+    This allows us to put <%docstring>Lorem ipsum</%docstring> inside
+    of the assembly templates.
+    """
+    __keyword__ = 'docstring'
 
-    render_global = IsInside()
+    def __init__(self, *args, **kwargs):
+        super(pwn_docstring, self).__init__('docstring', (), (), (), (), **kwargs)
+        self.ismodule = True
 
+    @property
+    def text(self):
+        children = self.get_children()
+        if len(children) != 1 or not isinstance(children[0], Text):
+            raise Exception("docstring tag only supports text")
+
+        docstring = children[0].content
+
+        return '__doc__ = %r' % docstring
+
+    @property
+    def code(self):
+        return ast.PythonCode(self.text)
+
+    def accept_visitor(self, visitor):
+        method = getattr(visitor, "visitCode", lambda x: x)
+        method(self)
+
+
+def lookup_template(filename):
     curdir = os.path.dirname(os.path.abspath(__file__))
     lookup = TemplateLookup(
         directories      = [os.path.join(curdir, 'templates')],
-        module_directory = os.path.expanduser('~/.pwntools-cache/mako')
+        module_directory = context.cache
     )
-
-    # The purpose of this definition is to create a new Tag.
-    # The Tag has a metaclass, which saves this definition even
-    # though to do not use it here.
-    class pwn_docstring(Tag):
-        __keyword__ = 'docstring'
-
-        def __init__(self, *args, **kwargs):
-            super(pwn_docstring, self).__init__('docstring', (), (), (), (), **kwargs)
-            self.ismodule = True
-
-        @property
-        def text(self):
-            children = self.get_children()
-            if len(children) != 1 or not isinstance(children[0], Text):
-                raise Exception("docstring tag only supports text")
-
-            docstring = children[0].content
-
-            return '__doc__ = %r' % docstring
-
-        @property
-        def code(self):
-            return ast.PythonCode(self.text)
-
-        def accept_visitor(self, visitor):
-            method = getattr(visitor, "visitCode", lambda x: x)
-            method(self)
-
-def lookup_template(filename):
-    init_mako()
-
-    if filename not in loaded:
-        loaded[filename] = lookup.get_template(filename)
-
-    return loaded[filename]
+    return lookup.get_template(filename)
 
 def make_function(funcname, filename, directory):
     import inspect
@@ -111,8 +105,9 @@ def make_function(funcname, filename, directory):
 def wrap(template, render_global):
     def %s(%s):
         %r
-        with render_global.go_inside() as was_inside:
-            lines = template.render(%s).split('\\n')
+        with context.local(os=%r, arch=%r):
+            with render_global.go_inside() as was_inside:
+                lines = template.render(%s).split('\\n')
         for i in xrange(len(lines)):
             line = lines[i]
             def islabelchar(c):

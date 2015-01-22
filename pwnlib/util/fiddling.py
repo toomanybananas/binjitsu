@@ -104,28 +104,18 @@ def bits(s, endian = 'big', zero = 0, one = 1):
         little = endian == 'little'
 
     out = []
-    if isinstance(s, str):
-        for c in s:
-            b = ord(c)
-            byte = []
-            for _ in range(8):
-                byte.append(one if b & 1 else zero)
-                b >>= 1
-            if little:
-                out += byte
-            else:
-                out += byte[::-1]
-    elif isinstance(s, (int, long)):
-        while s:
-            bit, s = one if s & 1 else zero, s >> 1
-            out.append(bit)
-        while len(out) % 8:
-            out.append(zero)
-        if not little:
-            out = out[::-1]
-    else:
-        raise ValueError("bits(): 's' must be either a string or a number")
+    if isinstance(s, (int, long)):
+        s = packing.pack(s, 'all')
 
+    for c in s:
+        b = ord(c)
+        byte = []
+        for _ in range(8):
+            byte.append(one if b & 1 else zero)
+            b >>= 1
+        if not little:
+            byte = byte[::-1]
+        out += byte
     return out
 
 def bits_str(s, endian = 'big', zero = '0', one = '1'):

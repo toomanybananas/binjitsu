@@ -1,5 +1,5 @@
 <% from pwnlib.shellcraft import common, amd64 %>
-<%page args="sock = 'rbp'"/>
+<%page args="sock = 'rbp', fd = 3"/>
 <%docstring>
 Args: [sock (imm/reg) = rbp]
     Duplicates sock to stdin, stdout and stderr
@@ -14,7 +14,7 @@ Args: [sock (imm/reg) = rbp]
 ${dup}:
     ${amd64.mov('rbp', sock)}
 
-    push 3
+    ${push(fd)}
 ${looplabel}:
     pop rsi
     dec rsi
