@@ -379,8 +379,8 @@ class ssh(Timeout, Logger):
         """
         return self.run(shell, tty, timeout = timeout)
 
-    def run(self, process, tty = False, wd = None, env = None, timeout = Timeout.default):
-        r"""run(process, tty = False, wd = None, env = None, timeout = Timeout.default) -> ssh_channel
+    def system(self, process, tty = False, wd = None, env = None, timeout = Timeout.default):
+        r"""system(command, tty = False, wd = None, env = None, timeout = Timeout.default) -> ssh_channel
 
         Open a new channel with a specific process inside. If `tty` is True,
         then a TTY is requested on the remote server.
@@ -403,6 +403,9 @@ class ssh(Timeout, Logger):
             wd = self._wd
 
         return ssh_channel(self, process, tty, wd, env, timeout)
+
+    # Backward compatibility
+    run = system
 
     def run_to_end(self, process, tty = False, wd = None, env = None):
         r"""run_to_end(process, tty = False, timeout = Timeout.default, env = None) -> str
