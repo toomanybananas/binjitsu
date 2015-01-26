@@ -1,12 +1,8 @@
 #!/usr/bin/env python2
 
 import argparse, os, re
-from pwnlib import asm, constants
-from pwnlib.util import safeeval
-from pwnlib.context import context
-
-import pwnlib.log
-pwnlib.log.install_default_handler()
+from pwn import *
+from . import common
 
 p = argparse.ArgumentParser(
     description = "Looking up constants from header files.\n\nExample: constgrep -c freebsd -m  ^PROT_ '3 + 4'",
@@ -50,8 +46,9 @@ p.add_argument(
 p.add_argument(
     '-c', '--context',
     metavar = '<opt>',
-    choices = context.oses + list(context.architectures),
-    default = ['i386','linux'],
+    type   = common.context_arg,
+    choices = common.choices,
+    help = 'The os/architecture/endianness/bits the shellcode will run in (default: linux/i386), choose from: %(choices)s'
     action = 'append',
     help = 'The os/architecture to find constants for (default: linux/i386), choose from: %s' % \
     ', '.join(sorted(context.oses + context.architectures.keys()))
