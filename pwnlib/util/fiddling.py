@@ -14,7 +14,12 @@ def unhex(s):
 
       >>> unhex("74657374")
       'test'
+      >>> unhex("F\n")
+      '\x0f'
 """
+    s = s.strip()
+    if len(s) % 2 != 0:
+        s = '0' + s
     return s.decode('hex')
 
 def enhex(x):
