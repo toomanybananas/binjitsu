@@ -6,7 +6,7 @@ from ..context import context
 from ..term    import text
 
 def unhex(s):
-    """unhex(s) -> str
+    r"""unhex(s) -> str
 
     Hex-decodes a string.
 
