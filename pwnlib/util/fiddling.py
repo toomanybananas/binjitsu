@@ -6,16 +6,16 @@ from ..context import context
 from ..term    import text
 
 def unhex(s):
-    r"""unhex(s) -> str
+    """unhex(s) -> str
 
     Hex-decodes a string.
 
     Example:
 
-      >>> unhex("74657374")
-      'test'
-      >>> unhex("F\n")
-      '\x0f'
+        >>> unhex("74657374")
+        'test'
+        >>> unhex("F\n")
+        '\x0f'
 """
     s = s.strip()
     if len(s) % 2 != 0:
@@ -29,8 +29,8 @@ def enhex(x):
 
     Example:
 
-      >>> enhex("test")
-      '74657374'
+        >>> enhex("test")
+        '74657374'
 """
     return x.encode('hex')
 
@@ -41,8 +41,8 @@ def urlencode(s):
 
     Example:
 
-      >>> urlencode("test")
-      '%74%65%73%74'
+        >>> urlencode("test")
+        '%74%65%73%74'
 """
     return ''.join(['%%%02x' % ord(c) for c in s])
 
@@ -53,14 +53,14 @@ def urldecode(s, ignore_invalid = False):
 
     Example:
 
-      >>> urldecode("test%20%41")
-      'test A'
-      >>> urldecode("%qq")
-      Traceback (most recent call last):
-          ...
-      ValueError: Invalid input to urldecode
-      >>> urldecode("%qq", ignore_invalid = True)
-      '%qq'
+        >>> urldecode("test%20%41")
+        'test A'
+        >>> urldecode("%qq")
+        Traceback (most recent call last):
+        ...
+        ValueError: Invalid input to urldecode
+        >>> urldecode("%qq", ignore_invalid = True)
+        '%qq'
 """
     res = ''
     n = 0
@@ -86,20 +86,20 @@ def bits(s, endian = 'big', zero = 0, one = 1):
     Converts the argument a list of bits.
 
     Arguments:
-      s: A string or number to be converted into bits.
-      endian (str): The binary endian, default 'big'.
-      zero: The representing a 0-bit.
-      one: The representing a 1-bit.
+        s: A string or number to be converted into bits.
+        endian (str): The binary endian, default 'big'.
+        zero: The representing a 0-bit.
+        one: The representing a 1-bit.
 
     Returns:
-      A list consisting of the values specified in `zero` and `one`.
+        A list consisting of the values specified in `zero` and `one`.
 
     Examples:
 
-      >>> bits(511, zero = "+", one = "-")
-      ['+', '+', '+', '+', '+', '+', '+', '-', '-', '-', '-', '-', '-', '-', '-', '-']
-      >>> sum(bits("test"))
-      17
+        >>> bits(511, zero = "+", one = "-")
+        ['+', '+', '+', '+', '+', '+', '+', '-', '-', '-', '-', '-', '-', '-', '-', '-']
+        >>> sum(bits("test"))
+        17
 """
 
 
@@ -200,8 +200,8 @@ def bitswap(s):
     Reverses the bits in every byte of a given string.
 
     Example:
-      >>> bitswap("1234")
-      '\\x8cL\\xcc,'
+        >>> bitswap("1234")
+        '\\x8cL\\xcc,'
 """
 
     out = []
@@ -217,18 +217,18 @@ def bitswap_int(n, width):
     Reverses the bits of a numbers and returns the result as a new number.
 
     Arguments:
-      n (int): The number to swap.
-      width (int): The width of the integer
+        n (int): The number to swap.
+        width (int): The width of the integer
 
     Examples:
-      >>> hex(bitswap_int(0x1234, 8))
-      '0x2c'
-      >>> hex(bitswap_int(0x1234, 16))
-      '0x2c48'
-      >>> hex(bitswap_int(0x1234, 24))
-      '0x2c4800'
-      >>> hex(bitswap_int(0x1234, 25))
-      '0x589000'
+        >>> hex(bitswap_int(0x1234, 8))
+        '0x2c'
+        >>> hex(bitswap_int(0x1234, 16))
+        '0x2c48'
+        >>> hex(bitswap_int(0x1234, 24))
+        '0x2c4800'
+        >>> hex(bitswap_int(0x1234, 25))
+        '0x589000'
 """
     # Make n fit inside the width
     n &= (1 << width) - 1
@@ -324,16 +324,16 @@ def xor_pair(data, avoid = '\x00\n'):
     using a given alphabet.
 
     Arguments:
-      data (str): The desired string.
-      avoid: The list of disallowed characters. Defaults to nulls and newlines.
+        data (str): The desired string.
+        avoid: The list of disallowed characters. Defaults to nulls and newlines.
 
     Returns:
-      Two strings which will xor to the given string. If no such two strings exist, then None is returned.
+        Two strings which will xor to the given string. If no such two strings exist, then None is returned.
 
     Example:
 
-      >>> xor_pair("test")
-      ('\\x01\\x01\\x01\\x01', 'udru')
+        >>> xor_pair("test")
+        ('\\x01\\x01\\x01\\x01', 'udru')
 """
 
     alphabet = ''.join(chr(n) for n in range(256) if chr(n) not in avoid)
@@ -360,16 +360,16 @@ def randoms(count, alphabet = string.lowercase):
     Returns a random string of a given length using only the specified alphabet.
 
     Arguments:
-      count (int): The length of the desired string.
-      alphabet: The alphabet of allowed characters. Defaults to all lowercase characters.
+        count (int): The length of the desired string.
+        alphabet: The alphabet of allowed characters. Defaults to all lowercase characters.
 
     Returns:
-      A random string.
+        A random string.
 
     Example:
 
-      >>> randoms(10) #doctest: +SKIP
-      'evafjilupm'
+        >>> randoms(10) #doctest: +SKIP
+        'evafjilupm'
 """
 
     return ''.join(random.choice(alphabet) for _ in xrange(count))
@@ -383,20 +383,20 @@ def rol(n, k, word_size = None):
     When `n` is a list, tuple or string, this is ``n[k % len(n):] + n[:k % len(n)]``.
 
     Arguments:
-      n: The value to rotate.
-      k(int): The rotation amount. Can be a positive or negative number.
-      word_size(int): If `n` is a number, then this is the assumed bitsize of `n`.  Defaults to :data:`pwnlib.context.word_size` if `None` .
+        n: The value to rotate.
+        k(int): The rotation amount. Can be a positive or negative number.
+        word_size(int): If `n` is a number, then this is the assumed bitsize of `n`.  Defaults to :data:`pwnlib.context.word_size` if `None` .
 
     Example:
 
-      >>> rol('abcdefg', 2)
-      'cdefgab'
-      >>> rol('abcdefg', -2)
-      'fgabcde'
-      >>> hex(rol(0x86, 3, 8))
-      '0x34'
-      >>> hex(rol(0x86, -3, 8))
-      '0xd0'
+        >>> rol('abcdefg', 2)
+        'cdefgab'
+        >>> rol('abcdefg', -2)
+        'fgabcde'
+        >>> hex(rol(0x86, 3, 8))
+        '0x34'
+        >>> hex(rol(0x86, -3, 8))
+        '0xd0'
 """
 
     word_size = word_size or context.word_size
@@ -436,12 +436,12 @@ def hexii(s, width = 16, skip = True):
     Return a HEXII-dump of a string.
 
     Arguments:
-      s(str): The string to dump
-      width(int): The number of characters per line
-      skip(bool): Should repeated lines be replaced by a "*"
+        s(str): The string to dump
+        width(int): The number of characters per line
+        skip(bool): Should repeated lines be replaced by a "*"
 
     Returns:
-      A HEXII-dump in the form of a string.
+        A HEXII-dump in the form of a string.
 """
 
     return hexdump(s, width, skip, True)
@@ -472,16 +472,16 @@ def hexdump_iter(s, width = 16, skip = True, hexii = False, begin = 0,
     Return a hexdump-dump of a string as a generator of lines.
 
     Arguments:
-      s(str): The string to dump
-      width(int): The number of characters per line
-      skip(bool): Set to True, if repeated lines should be replaced by a "*"
-      hexii(bool): Set to True, if a hexii-dump should be returned instead of a hexdump.
-      begin(int):  Offset of the first byte to print in the left column
-      style(dict): Color scheme to use.
-      highlight(iterable): Byte values to highlight.
+        s(str): The string to dump
+        width(int): The number of characters per line
+        skip(bool): Set to True, if repeated lines should be replaced by a "*"
+        hexii(bool): Set to True, if a hexii-dump should be returned instead of a hexdump.
+        begin(int):  Offset of the first byte to print in the left column
+        style(dict): Color scheme to use.
+        highlight(iterable): Byte values to highlight.
 
     Returns:
-      A hexdump-dump in the form of a string.
+        A hexdump-dump in the form of a string.
 """
     style     = style or {}
     highlight = highlight or []
