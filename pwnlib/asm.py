@@ -57,7 +57,7 @@ from .log import getLogger
 
 log = getLogger(__name__)
 
-__all__ = ['asm', 'cpp', 'disasm', 'which_binutils']
+__all__ = ['asm', 'cpp', 'disasm', 'make_elf']
 
 _basedir = path.split(__file__)[0]
 _incdir  = path.join(_basedir, 'data', 'includes')
@@ -353,7 +353,7 @@ _start:
 __start:
 '''
 
-def elf(data, vma = None, strip=True, **kwargs):
+def make_elf(data, vma = None, strip=True, **kwargs):
     r"""
     Builds an ELF file with the specified binary data as its
     executable code.
