@@ -265,6 +265,9 @@ def attach(target, execute = None, exe = None, arch = None):
             sexe = proc.exe(spid)
             name = os.path.basename(sexe)
             # XXX: parse cmdline
+            print name
+            print name
+            print name
             if name.startswith('qemu-') or name.startswith('gdbserver'):
                 exe = proc.cmdline(spid)[-1]
                 return os.path.join(proc.cwd(spid), exe)
