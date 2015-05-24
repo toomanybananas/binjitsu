@@ -167,8 +167,12 @@ class GadgetFinder(object):
         leave = re.compile(r'^leave$')
         mov   = re.compile(r'^mov (.{3}), (.{3})')
         xchg  = re.compile(r'^xchg (.{3}), (.{3})')
+        int80 = re.compile(r'int +0x80')
+        syscall = re.compile(r'^syscall$')
+        sysenter = re.compile(r'^sysenter$')
 
-        valid = lambda insn: any(map(lambda pattern: pattern.match(insn), [pop,add,ret,leave,mov,xchg]))
+        valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
+            [pop,add,ret,leave,mov,xchg,int80,syscall,sysenter]))
 
         insns = [g.strip() for g in gadgets["gadget"].split(";")]
         if all(map(valid, insns)):
