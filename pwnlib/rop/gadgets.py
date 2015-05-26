@@ -37,11 +37,20 @@ class Gadget(object):
     #:      add esp, 0x10; ret ==> 0x14
     move = 0
 
-    def __init__(self, address, insns, regs, move):
+    #: Gadget raw bytes
+    #: 
+    #: Example:
+    #:      'mov eax, ebx ; ret 4' ==> '\x89\xd8\xc2\x04\x00'
+    bytes = ""
+
+    def __init__(self, address, insns, regs, move, bytes):
         self.address = address
         self.insns   = insns
         self.regs    = regs
         self.move    = move
+
+        #Gadget raw bytes 
+        self.bytes   = bytes
 
     __indices = ['address', 'details']
 
@@ -62,4 +71,33 @@ class Gadget(object):
         # Backward compatibility
         if isinstance(key, int):
             key = self.__indices[key]
+        return setattr(self, key, value)
+
+class Mem(object):
+    """
+    Describes a Mem postion for gadget.
+
+    Distinguish it from a Immediate Num.
+    """
+
+    #: Example:
+    #:      pop eax; ret
+    #:          {"eax": Mem("esp", 0, 32)}, not {"eax": 0}
+    #:      move eax, 0x1234; ret
+    #:          {"eax": 1234}
+
+    __slots__ = ['reg', 'offset', 'size']
+
+    def __init__(self, reg, offset=0, size=32):
+        self.reg = reg
+        self.offset = offset
+        self.size = size
+
+    def __str__(self):
+        return "M%d(%s, #%x)" % (self.size, self.reg, self.offset)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
         return setattr(self, key, value)
