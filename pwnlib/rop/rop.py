@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import tempfile
+import random
 
 from .. import abi
 from .. import constants
@@ -21,7 +22,8 @@ from ..util import packing
 from ..util.packing import *
 from . import srop
 from .call import Call, StackAdjustment, AppendedArgument, CurrentStackPointer, NextGadgetAddress
-from .gadgets import Gadget
+from .gadgets import Gadget, Mem
+from .gadgetfinder import GadgetFinder, GadgetClassifier, GadgetSolver
 
 log = getLogger(__name__)
 __all__ = ['ROP']
@@ -203,7 +205,7 @@ class ROP(object):
         Arguments:
             elfs(list): List of ``pwnlib.elf.ELF`` objects for mining
         """
-        import ropgadget
+        #import ropgadget
 
         # Permit singular ROP(elf) vs ROP([elf])
         if isinstance(elfs, ELF):
@@ -215,9 +217,34 @@ class ROP(object):
         self.base = base
         self.align = max((e.elfclass for e in elfs)) / 8
         self.migrated = False
-        self.__load()
 
-    def setRegisters(self, registers):
+        #self.__load()
+
+        #Find all gadgets
+        gf = GadgetFinder(elfs, "all")
+        gads = gf.load_gadgets() 
+
+        self.gadgets= {}
+        self.Verify = GadgetSolver(arch=elfs[0].arch)
+        gc = GadgetClassifier(arch=elfs[0].arch)
+        for gadget in gads:
+            cl = gc.classify(gadget)
+            if cl:
+                self.gadgets[cl.address] = cl
+        self.gadget_graph = self.build_graph()
+
+        self._global_delete_gadget = {}
+        ggh = copy.deepcopy(self.gadget_graph)
+
+        self._top_sorted = self.__build_top_sort(ggh)
+
+        for d, dlist in self._global_delete_gadget.items():
+            for i in dlist:
+                self.gadget_graph[d].remove(i)
+
+
+
+    def setRegisters(self, values):
         """
         Returns an OrderedDict of addresses/values which will set the specified
         register context.
@@ -228,15 +255,83 @@ class ROP(object):
         Returns:
             An OrderedDict of ``{register: sequence of gadgets, values, etc.}``.
         """
-        reg_order = collections.OrderedDict()
+        out = []
+        ropgadgets = {}
+        gadget_list = {}
 
-        for reg, value in registers.items():
-            gadget = self.find_gadget(['pop ' + reg, 'ret'])
-            if not gadget:
-                log.error("can't set %r" % reg)
-            reg_order[reg] = [gadget, value]
+        if isinstance(values, list):
+            values = dict(values)
 
-        return reg_order
+        for reg, value in values.items():
+
+            ropgadget = self.search_path("sp", [reg])
+            if ropgadget:
+                ropgadget = ropgadget[0]
+
+            if not ropgadget:
+                log.error("Gadget to reg %s not found!" % reg)
+
+            # Combine the same gadgets together.
+            last_gadget_address = ropgadget[-1].address
+            ropgadgets[last_gadget_address] = ropgadget
+            if last_gadget_address not in gadget_list.keys():
+                gadget_list[last_gadget_address] = []
+            gadget_list[last_gadget_address].append(reg)
+
+        for address, regs in gadget_list.items():
+            ropgadget = ropgadgets[address]
+            conditions = {}
+            for reg in regs:
+                conditions[reg] = values[reg]
+            sp, stack = self.Verify.verify_path(ropgadget, conditions)
+            out.append(("_".join(regs), (ropgadget, sp, stack)))
+
+        ordered_out = collections.OrderedDict(sorted(out,
+                      key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
+
+        ordered_out = self.flat_as_stack(ordered_out)
+
+        return ordered_out
+
+    def flat_as_stack(self, ordered_dict):
+
+        out = []
+        junk = "$" * self.align
+
+        for reg, result in ordered_dict.items():
+            outrop = []
+            ropgadget, move, _ = result
+            sp = 0
+            know = {}
+            for gad in ropgadget:
+                if sp != 0:
+                    know[sp / self.align] = gad.address
+                sp += gad.move - self.align
+
+            ropgadget, _, stack_result = result
+            outrop.append(ropgadget[0].address)
+
+            temp_combine = ""
+            i = 0
+            while i < (move - self.align):
+                if i in stack_result.keys():
+                    temp_packed = 0
+                    for j in range(self.align):
+                        temp_packed += stack_result[i+j] << 8*j
+                    outrop.append(temp_packed)
+                    i += self.align
+                elif i in know.keys():
+                    outrop.append(know[i])
+                    i += self.align
+                else:
+                    outrop.append(junk)
+                    i += self.align
+
+            out += [(reg, outrop)]
+
+        out = collections.OrderedDict(out)
+        return out
+
 
     def resolve(self, resolvable):
         """Resolves a symbol to an address
@@ -366,8 +461,11 @@ class ROP(object):
                 setRegisters = self.setRegisters(registers)
 
                 for register, gadgets in setRegisters.items():
-                    value       = registers[register]
-                    description = self.describe(value) or 'arg%i' % slot.args.index(value)
+                    regs        = register.split("_")
+                    values      = [registers[reg] for reg in regs]
+                    slot_indexs  = [slot.args.index(v) for v in values]
+                    description = " | ".join([self.describe(value) for value in values]) \
+                            or 'arg%r' % slot_indexs
                     stack.describe('set %s = %s' % (register, description))
                     stack.extend(gadgets)
 
@@ -492,7 +590,7 @@ class ROP(object):
         else:
             addr = resolvable
             resolvable = ''
-
+        
         if addr:
             self.raw(Call(resolvable, addr, arguments, abi))
 
@@ -855,3 +953,185 @@ class ROP(object):
             return self.call(attr, args)
 
         return call
+
+    def build_graph(self):
+        '''Build gadgets graph, gadget as vertex, reg as edge.
+        '''
+        gadget_graph = {}
+        for gad_1 in self.gadgets.values():
+            gadget_graph[gad_1] = set()
+            outputs = []
+            for i in gad_1.regs.keys():
+                if isinstance(i, str) and "[" not in i:
+                    outputs.append(i[-2:])
+
+            for gad_2 in self.gadgets.values():
+                if gad_1 == gad_2:
+                    continue
+                inputs=[]
+                for i in gad_2.regs.values():
+                    if isinstance(i, str) and "[" not in i:
+                        inputs.append(i[-2:])
+                    if isinstance(i, list):
+                        for j in i:
+                            if isinstance(j, str) and "[" not in i:
+                                inputs.append(j[-2:])
+
+                inter = set(inputs) & set(outputs)
+                if len(inter) > 0:
+                    gadget_graph[gad_1].add(gad_2)
+
+        return gadget_graph
+
+    def __build_top_sort(self, graph):
+        """
+        Topological sort a graph.
+
+        Arguments:
+            
+            graph(dict):
+                A simple example : graph = {'eax': ['ebx'], 'ebx': ['eax'], 'edx': ['eax']}
+                May be cycles in graph. we need to handle it.
+
+        Return Value:
+            top_sorted(list):
+                such as: ["edx", "eax", "ebx"]
+        """
+        top_sorted = []
+        indegree_zero = []
+
+        #Inital indegree list will zero.
+        indegree = {}
+        for k, v in graph.items():
+            indegree[k] = 0
+            for l in v:
+                indegree[l] = 0
+
+        #Caculate indegree, for gadget graph.
+        for g, glist in graph.items():
+            for gadget in glist:
+                indegree[gadget] += 1
+
+        #inital indegree_zero list.
+        for g, indeg in indegree.items():
+            if indeg == 0:
+                indegree_zero.append(g)
+        
+        # TOP sort
+        while len(indegree_zero) > 0:
+            n = indegree_zero.pop()
+            top_sorted.append(n)
+
+            if n not in graph.keys():
+                continue
+
+            for m in graph[n]:
+                indegree[m] -= 1
+                if indegree[m] == 0:
+                    indegree_zero.append(m)
+            del(graph[n])
+        
+        if len(graph) == 0:
+            return top_sorted
+
+        # Recursive top sort.
+        for g, indeg in indegree.items():
+            if indeg > 1:
+                for k, glist in graph.items():
+                    for h in glist:
+                        if h == g:
+                            #delete the edge of a cirle.
+                            graph[k].remove(h)
+
+                            #record the deleted edge of cirles.
+                            if k not in self._global_delete_gadget.keys():
+                                self._global_delete_gadget[k] = set()
+                            self._global_delete_gadget[k].add(h)
+                            
+                            # Recurisve top sorting.
+                            last_result = self.__build_top_sort(graph)
+                            if not last_result:
+                                last_result = []
+
+                            return top_sorted + last_result
+
+
+    def search_path(self, src, regs):
+        '''Search paths, from src to regs.
+        Example: search("rsp", ["rdi"]), such as gadget "pop rdi; ret" will be return to us.
+        '''
+        start = set()
+        for gadget in self.gadgets.values():
+            gadget_srcs = []
+            for i in gadget.regs.values():
+                if isinstance(i , Mem):
+                    gadget_srcs.append(i.reg)
+                elif isinstance(i, list):
+                    gadget_srcs.extend([str(x) for x in i])
+                elif isinstance(i, str):
+                    gadget_srcs.append(i)
+
+            if any([src in i for i in gadget_srcs]):
+                start.add(gadget)
+
+        end = set()
+        alldst = {}
+        for reg in regs:
+            alldst[reg] = set()
+
+        asm_instr_dict = {}
+        for gadget in self.gadgets.values():
+            the_insns = "; ".join(gadget.insns)
+            asm_instr_dict[the_insns] = gadget
+            gadget_dsts = gadget.regs.keys()
+            for reg in regs:
+                if reg in gadget_dsts:
+                    alldst[reg].add(the_insns)
+
+        dstlist = alldst.values()
+        results = reduce(set.intersection, dstlist)
+        for r in results:
+            end.add(asm_instr_dict[r])
+
+        paths = []
+        if len(start) != 0 and len(end) != 0:
+            for s in list(start):
+                for e in list(end):
+                    path = self.__find_path(self.gadget_graph, s, e)
+                    paths += list(path)
+       
+        # Give every reg a random num
+        cond = {}
+        for reg in regs:
+            cond[reg] = random.randint(2**16, 2**32)
+        
+        # Solve this gadgets arrangement, if stack's value not changed, ignore it.
+        path_filted = []
+        for path in paths:
+            out = self.Verify.verify_path(path, cond)
+            if out:
+                path_filted.append(path)
+
+        paths = sorted(path_filted, 
+                key=lambda path: len(" + ".join(["; ".join(gad.insns) for gad in path])))
+
+        if not paths:
+            return None
+
+        return paths
+
+
+    def __find_path(self, graph, start, end, path=[]):
+        '''DFS for find a path in gadget graph.
+        '''
+        path = path + [start]
+
+        if start == end:
+            yield path
+        if not graph.has_key(start):
+            return
+        for node in graph[start]:
+            if node not in path:
+                for new_path in self.__find_path(graph, node, end, path):
+                    if new_path:
+                        yield new_path

@@ -73,6 +73,22 @@ class Gadget(object):
             key = self.__indices[key]
         return setattr(self, key, value)
 
+    def __eq__(self, other):
+        """
+        Return self == other
+        """
+        if type(other) is type(self):
+            same_address    = self.address  == other.address
+            same_move       = self.move     == other.move
+            same_insns      = "; ".join(self.insns)    == "; ".join(other.insns) 
+
+            return same_address and same_insns and same_move
+        else:
+            return False
+
+    def __hash__(self):
+        return hash((self.address, "; ".join(self.insns), self.move))
+
 class Mem(object):
     """
     Describes a Mem postion for gadget.

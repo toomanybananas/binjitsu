@@ -91,7 +91,7 @@ class GadgetClassifier(GadgetMapper):
         address = gadget["address"]
         insns   = gadget["gadget"]
         bytes   = gadget["bytes"]
-
+        
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes)
         if not gadget_mapper:
             return None
@@ -111,7 +111,7 @@ class GadgetClassifier(GadgetMapper):
                 move = extract_offset(inputs)[1]
                 continue
 
-            if "ip" in str(reg_out):
+            if "ip" in str(reg_out) or "pc" in str(reg_out):
                 if inputs._is_mem:
                     ip_move = inputs.a.disp 
                     continue
@@ -119,8 +119,14 @@ class GadgetClassifier(GadgetMapper):
             if inputs._is_mem:
                 offset = inputs.a.disp 
                 reg_mem = locations_of(inputs)
+
+                if isinstance(reg_mem, list):
+                    reg_str = "_".join([str(i) for i in reg_mem])
+                else:
+                    reg_str = str(reg_mem)
+
                 reg_size = inputs.size
-                reg[str(reg_out)] = Mem(reg_mem, offset, reg_size)
+                reg[str(reg_out)] = Mem(reg_str, offset, reg_size)
 
             elif inputs._is_reg:
                 reg[str(reg_out)] = str(inputs)
@@ -143,7 +149,6 @@ class GadgetClassifier(GadgetMapper):
             return Gadget(address, insns, reg, move, bytes)
 
         return None
-        
 
 
 class GadgetSolver(GadgetMapper):
@@ -184,6 +189,8 @@ class GadgetSolver(GadgetMapper):
                     num = model[model[1]].num_entries()
                     stack_changed += model[model[1]].as_list()[:num]
 
+        if len(stack_changed) == 0:
+            return None
 
         stack_converted = [(i[0].as_signed_long(), i[1].as_long()) for i in stack_changed]
         stack_changed = OrderedDict(sorted(stack_converted, key=itemgetter(0)))
@@ -242,12 +249,13 @@ class GadgetFinder(object):
         arm_gadget = {
                 "ret":  [["[\x00-\xff]{1}\x80\xbd\xe8", 4, 4],       # pop {,pc}
                         ],
-                "bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
-                        ],
-                "blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
-                        ],
+                #"bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
+                        #],
+                #"blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
+                        #],
                 "svc":  [["\x00-\xff]{3}\xef", 4, 4] # svc
-                        ]}
+                        ],
+                }
         all_arm_gadget = reduce(lambda x, y: x + y, arm_gadget.values())
         arm_gadget["all"] = all_arm_gadget
 
@@ -309,11 +317,10 @@ class GadgetFinder(object):
                 md = capstone.Cs(self.arch, self.mode)
                 decodes = md.disasm(v, k)
                 ldecodes = list(decodes)
-                gadget = ""
+                gadget = []
                 for decode in ldecodes:
-                    gadget += (decode.mnemonic + " " + decode.op_str + " ; ").replace("  ", " ")
+                    gadget.append(decode.mnemonic + " " + decode.op_str)
                 if len(gadget) > 0:
-                    gadget = gadget[:-3]
                     onegad = {}
                     onegad["address"] = k
                     onegad["gad_instr"] = ldecodes
@@ -336,11 +343,10 @@ class GadgetFinder(object):
                     decodes = md.disasm(section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]], 
                                         startAddress)
                     ldecodes = list(decodes)
-                    gadget = ""
+                    gadget = []
                     for decode in ldecodes:
-                        gadget += (decode.mnemonic + " " + decode.op_str + " ; ").replace("  ", " ")
+                        gadget.append(decode.mnemonic + " " + decode.op_str)
                     if len(gadget) > 0:
-                        gadget = gadget[:-3]
                         if (startAddress % gad[C_ALIGN]) == 0:
                             onegad = {}
                             onegad["address"] = startAddress
@@ -371,7 +377,8 @@ class GadgetFinder(object):
         valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
             [pop,add,ret,leave,mov,xchg,int80,syscall,sysenter]))
 
-        insns = [g.strip() for g in gadgets["gadget"].split(";")]
+        #insns = [g.strip() for g in gadgets["gadget"].split(";")]
+        insns = gadgets["gadget"]
         if all(map(valid, insns)):
             new.append(gadgets)
 
@@ -401,7 +408,7 @@ class GadgetFinder(object):
             br = [self.gadget_filter]
 
         for gadget in gadgets:
-            insts = gadget["gadget"].split(" ; ")
+            insts = gadget["gadget"]
             if len(insts) == 1 and insts[0].split(" ")[0] not in br:
                 continue
             if insts[-1].split(" ")[0] not in br:
@@ -410,7 +417,7 @@ class GadgetFinder(object):
                 continue
             if not multibr and self.__checkMultiBr(insts, br) > 1:
                 continue
-            if len([m.start() for m in re.finditer("ret", gadget["gadget"])]) > 1:
+            if len([m.start() for m in re.finditer("ret", "; ".join(gadget["gadget"]))]) > 1:
                 continue
             new += [gadget]
         return new
@@ -418,9 +425,10 @@ class GadgetFinder(object):
     def __deduplicate(self, gadgets):
         new, insts = [], []
         for gadget in gadgets:
-            if gadget["gadget"] in insts:
+            insns = "; ".join(gadget["gadget"]) 
+            if insns in insts:
                 continue
-            insts.append(gadget["gadget"])
+            insts.append(insns)
             new += [gadget]
         return new
 
