@@ -101,7 +101,8 @@ class GadgetClassifier(GadgetMapper):
         ip_move = 0
         for reg_out, _ in gadget_mapper:
             if reg_out._is_ptr:
-                continue
+                return None
+
             if "flags" in str(reg_out):
                 continue
 
