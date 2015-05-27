@@ -218,19 +218,29 @@ class ROP(object):
         self.align = max((e.elfclass for e in elfs)) / 8
         self.migrated = False
 
-        #self.__load()
+        self.arch = elfs[0].arch
 
         #Find all gadgets
         gf = GadgetFinder(elfs, "all")
         gads = gf.load_gadgets() 
-
         self.gadgets= {}
-        self.Verify = GadgetSolver(arch=elfs[0].arch)
-        gc = GadgetClassifier(arch=elfs[0].arch)
-        for gadget in gads:
+        for gad in gads:
+            self.gadgets[gad.address] = gad
+
+       
+    def init_classify_and_solver(self):
+        """
+        Classify and solver gadgets as needed.
+        Because of `amoco` has a large initialization-time penalty.
+        """
+        gads = copy.deepcopy(self.gadgets)
+        self.gadgets= {}
+        gc = GadgetClassifier(arch=self.arch)
+        for gadget in gads.values():
             cl = gc.classify(gadget)
             if cl:
                 self.gadgets[cl.address] = cl
+
         self.gadget_graph = self.build_graph()
 
         self._global_delete_gadget = {}
@@ -241,6 +251,8 @@ class ROP(object):
         for d, dlist in self._global_delete_gadget.items():
             for i in dlist:
                 self.gadget_graph[d].remove(i)
+
+        self.Verify = GadgetSolver(arch=self.arch)
 
 
 
@@ -255,6 +267,10 @@ class ROP(object):
         Returns:
             An OrderedDict of ``{register: sequence of gadgets, values, etc.}``.
         """
+        
+        # init GadgetSolver and GadgetClassify
+        self.init_classify_and_solver()
+
         out = []
         ropgadgets = {}
         gadget_list = {}
@@ -296,7 +312,6 @@ class ROP(object):
     def flat_as_stack(self, ordered_dict):
 
         out = []
-        junk = "$" * self.align
 
         for reg, result in ordered_dict.items():
             outrop = []
@@ -305,11 +320,11 @@ class ROP(object):
             know = {}
             for gad in ropgadget:
                 if sp != 0:
-                    know[sp / self.align] = gad.address
+                    know[sp / self.align] = gad
                 sp += gad.move - self.align
 
             ropgadget, _, stack_result = result
-            outrop.append(ropgadget[0].address)
+            outrop.append(ropgadget[0])
 
             temp_combine = ""
             i = 0
@@ -324,7 +339,7 @@ class ROP(object):
                     outrop.append(know[i])
                     i += self.align
                 else:
-                    outrop.append(junk)
+                    outrop.append(Padding())
                     i += self.align
 
             out += [(reg, outrop)]
@@ -621,7 +636,7 @@ class ROP(object):
             log.error("Could not find any instructions in %r" % syscall_instructions)
 
         # Generate the SROP frame which would invoke the syscall
-        with context.local(arch=self.elfs[0].arch):
+        with context.local(arch=self.arch):
             frame         = srop.SigreturnFrame()
             frame.pc      = syscall_gadget
             frame.syscall = syscall_number

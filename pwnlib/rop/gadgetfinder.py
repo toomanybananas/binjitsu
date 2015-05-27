@@ -30,6 +30,8 @@ MAX_SIZE = 100
 class GadgetMapper(object):
 
     def __init__(self, arch="i386"):
+        '''Base class which can symbolic execution gadget instructions.
+        '''
         self.arch = arch
         
         if arch == "i386":
@@ -41,11 +43,28 @@ class GadgetMapper(object):
         elif arch == "arm":
             import amoco.arch.arm.cpu_armv7 as cpu 
             self.align = 4
+        else:
+            raise Exception("Unsupported archtecture %s." % arch)
+
         self.cpu = cpu
 
     def sym_exec_gadget_and_get_mapper(self, code):
         '''This function gives you a ``mapper`` object from assembled `code`. 
         `code` will basically be our assembled gadgets.
+
+        Arguments: 
+            code(str): The raw bytes of gadget which you want to symbolic execution.
+
+        Return:
+            A mapper object.
+            Example:
+                [u'pop rdi', u'ret '] ==> "\x5f\xc3"
+                sym_exec_gadget_and_get_mapper("\x5f\xc3")
+
+                Return a mapper object:
+                    rdi <- { | [0:64]->M64(rsp) | }
+                    rip <- { | [0:64]->M64(rsp+8) | }
+                    rsp <- { | [0:64]->(rsp+0x10) | }
 
         Note that `call`s will be neutralized in order to not mess-up the 
         symbolic execution (otherwise the instruction just after the `call 
@@ -61,7 +80,9 @@ class GadgetMapper(object):
             amoco.system.core.DataIO(code), self.cpu
         )
         blocks = list(amoco.lsweep(p).iterblocks())
-        assert(len(blocks) > 0)
+        if len(blocks) == 0:
+            return None
+        #assert(len(blocks) > 0)
         mp = amoco.cas.mapper.mapper()
         for block in blocks:
             # If the last instruction is a call, we need to "neutralize" its effect
@@ -88,9 +109,9 @@ class GadgetClassifier(GadgetMapper):
             outs.append(gad)
 
     def classify(self, gadget):
-        address = gadget["address"]
-        insns   = gadget["gadget"]
-        bytes   = gadget["bytes"]
+        address = gadget.address
+        insns   = gadget.insns
+        bytes   = gadget.bytes
         
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes)
         if not gadget_mapper:
@@ -100,7 +121,7 @@ class GadgetClassifier(GadgetMapper):
         move = 0
         ip_move = 0
         for reg_out, _ in gadget_mapper:
-            if reg_out._is_ptr:
+            if reg_out._is_ptr or reg_out._is_mem:
                 return None
 
             if "flags" in str(reg_out):
@@ -294,7 +315,7 @@ class GadgetFinder(object):
             #build for cache
             data = {}
             for gad in gadgets:
-                data[gad["address"]] = gad["bytes"]
+                data[gad.address] = gad.bytes
             self.__cache_save(elf, data)
 
             out += gadgets
@@ -302,7 +323,7 @@ class GadgetFinder(object):
         return out
 
 
-    def __find_all_gadgets(self, section, gadgets, elf):
+    def __find_all_gadgets(self, section, gadget_re, elf):
         '''Find gadgets like ROPgadget do.
         '''
         C_OP = 0
@@ -314,46 +335,44 @@ class GadgetFinder(object):
         # Recover gadgets from cached file.
         cache = self.__cache_load(elf)
         if cache:
-            for k, v in cache.items():
+            for address, bytes in cache.items():
                 md = capstone.Cs(self.arch, self.mode)
-                decodes = md.disasm(v, k)
-                ldecodes = list(decodes)
-                gadget = []
-                for decode in ldecodes:
-                    gadget.append(decode.mnemonic + " " + decode.op_str)
-                if len(gadget) > 0:
-                    onegad = {}
-                    onegad["address"] = k
-                    onegad["gad_instr"] = ldecodes
-                    onegad["gadget"] = gadget
-                    onegad["bytes"] = v
-                    allgadgets += [onegad]
+                decodes = md.disasm(bytes, address)
+                insns = []
+                for decode in decodes:
+                    insns.append((decode.mnemonic + " " + decode.op_str).strip())
+                if len(insns) > 0:
+                    reg = {}
+                    move = 0
+                    allgadgets.append(Gadget(address, insns, reg, move, bytes))
             return allgadgets
-
-        for gad in gadgets:
+        
+        # If no cached gadgets, find as ROPgadget do.
+        for gad in gadget_re:
             allRef = [m.start() for m in re.finditer(gad[C_OP], section.data())]
             for ref in allRef:
                 for i in range(self.depth):
                     md = capstone.Cs(self.arch, self.mode)
-                    #md.detail = True
+                    back_bytes = i * gad[C_ALIGN]
+                    section_start = ref - back_bytes
+                    start_address = section.header.p_vaddr + section_start
                     if elf.elftype == 'DYN':
-                        startAddress = elf.address + section.header.p_vaddr + ref - (i*gad[C_ALIGN])
-                    else:
-                        startAddress = section.header.p_vaddr + ref - (i*gad[C_ALIGN])
+                        start_address = elf.address + start_address
 
-                    decodes = md.disasm(section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]], 
-                                        startAddress)
-                    ldecodes = list(decodes)
-                    gadget = []
-                    for decode in ldecodes:
-                        gadget.append(decode.mnemonic + " " + decode.op_str)
-                    if len(gadget) > 0:
-                        if (startAddress % gad[C_ALIGN]) == 0:
-                            onegad = {}
-                            onegad["address"] = startAddress
-                            onegad["gad_instr"] = ldecodes
-                            onegad["gadget"] = gadget
-                            onegad["bytes"] = section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]]
+                    decodes = md.disasm(section.data()[section_start : ref + gad[C_SIZE]], 
+                                        start_address)
+
+                    insns = []
+                    for decode in decodes:
+                        insns.append((decode.mnemonic + " " + decode.op_str).strip())
+                    
+                    if len(insns) > 0:
+                        if (start_address % gad[C_ALIGN]) == 0:
+                            reg     = {}
+                            move    = 0
+                            address = start_address
+                            bytes   = section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]]
+                            onegad = Gadget(address, insns, reg, move, bytes)
                             if self.need_filter:
                                 allgadgets += self.__filter_for_big_binary_or_elf32(onegad)
                             else:
@@ -361,7 +380,7 @@ class GadgetFinder(object):
 
         return allgadgets
 
-    def __filter_for_big_binary_or_elf32(self, gadgets):
+    def __filter_for_big_binary_or_elf32(self, gadget):
         '''Filter gadgets for big binary.
         '''
         new = []
@@ -376,12 +395,11 @@ class GadgetFinder(object):
         sysenter = re.compile(r'^sysenter$')
 
         valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
-            [pop,add,ret,leave,mov,xchg,int80,syscall,sysenter]))
+            [pop,add,ret,leave,mov,int80,syscall,sysenter]))
 
-        #insns = [g.strip() for g in gadgets["gadget"].split(";")]
-        insns = gadgets["gadget"]
+        insns = gadget.insns
         if all(map(valid, insns)):
-            new.append(gadgets)
+            new.append(gadget)
 
         return new
 
@@ -407,9 +425,8 @@ class GadgetFinder(object):
             br = ["ret", "int", "sysenter", "jmp", "call"]
         else:
             br = [self.gadget_filter]
-
         for gadget in gadgets:
-            insts = gadget["gadget"]
+            insts = gadget.insns
             if len(insts) == 1 and insts[0].split(" ")[0] not in br:
                 continue
             if insts[-1].split(" ")[0] not in br:
@@ -418,7 +435,7 @@ class GadgetFinder(object):
                 continue
             if not multibr and self.__checkMultiBr(insts, br) > 1:
                 continue
-            if len([m.start() for m in re.finditer("ret", "; ".join(gadget["gadget"]))]) > 1:
+            if len([m.start() for m in re.finditer("ret", "; ".join(insts))]) > 1:
                 continue
             new += [gadget]
         return new
@@ -426,7 +443,7 @@ class GadgetFinder(object):
     def __deduplicate(self, gadgets):
         new, insts = [], []
         for gadget in gadgets:
-            insns = "; ".join(gadget["gadget"]) 
+            insns = "; ".join(gadget.insns) 
             if insns in insts:
                 continue
             insts.append(insns)
