@@ -135,11 +135,10 @@ class GadgetClassifier(GadgetMapper):
         address = gadget.address
         insns   = gadget.insns
         bytes   = gadget.bytes
-        
+         
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes)
         if not gadget_mapper:
             return None
-
         regs = {}
         move = 0
         ip_move = 0
@@ -164,8 +163,14 @@ class GadgetClassifier(GadgetMapper):
             if "pc" in str(reg_out):
                 if isinstance(inputs, mem):
                     ip_move = inputs.a.disp
+                    reg_mem = locations_of(inputs)
+                    reg_str = "_".join([str(i) for i in reg_mem])
+                    if "sp" not in reg_str:
+                        return None
                 elif isinstance(inputs, op):
                     ip_move = extract_offset(inputs)[1]
+
+                if ip_move != 0:
                     continue
 
 
@@ -198,7 +203,11 @@ class GadgetClassifier(GadgetMapper):
                     allregs = str(allregs)
                 regs[str(reg_out)] = allregs
         
-        if ip_move == (move - self.align):
+
+        if "pop" in insns[-1]:
+            if ip_move == (move - self.align):
+                return Gadget(address, insns, regs, move, bytes)
+        else:
             return Gadget(address, insns, regs, move, bytes)
 
         return None
@@ -333,12 +342,12 @@ class GadgetFinder(object):
         x86_gadget["all"] = all_x86_gadget
 
         arm_gadget = {
-                "ret":  [["[\x00-\xff]{1}\x80\xbd\xe8", 4, 4],       # pop {,pc}
+                "ret":  [["[\x00-\xff]{1}[\x80-\x8f]{1}\xbd\xe8", 4, 4],       # pop {,pc}
                         ],
-                #"bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
-                        #],
-                #"blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
-                        #],
+                "bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
+                        ],
+                "blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
+                        ],
                 "svc":  [["\x00-\xff]{3}\xef", 4, 4] # svc
                         ],
                 }
@@ -473,9 +482,12 @@ class GadgetFinder(object):
         """Caculate branch number for __passClean().
         """
         count = 0
-        if decodes[-1].mnemonic == "pop":
-            count += 1
+        pop_pc = re.compile('^pop.* \{.*pc\}') 
         for inst in decodes:
+            insns = inst.mnemonic + " " + inst.op_str
+            if pop_pc.match(insns):
+                count += 1
+
             for group in branch_groups:
                 if group in inst.groups:
                     count += 1

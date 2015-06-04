@@ -10,23 +10,27 @@ import sys
 import tempfile
 import random
 
-from .. import abi
-from .. import constants
+from operator   import itemgetter
 
-from ..context import context
-from ..elf import ELF
-from ..log import getLogger
-from ..util import cyclic
-from ..util import lists
-from ..util import packing
+from ..         import abi
+from ..         import constants
+
+from ..context  import context
+from ..elf      import ELF
+from ..log      import getLogger
+from ..util     import cyclic
+from ..util     import lists
+from ..util     import packing
+from .          import srop
+from .call      import Call, StackAdjustment, AppendedArgument, CurrentStackPointer, NextGadgetAddress
+from .gadgets   import Gadget, Mem
+from .gadgetfinder  import GadgetFinder, GadgetClassifier, GadgetSolver
 from ..util.packing import *
-from . import srop
-from .call import Call, StackAdjustment, AppendedArgument, CurrentStackPointer, NextGadgetAddress
-from .gadgets import Gadget, Mem
-from .gadgetfinder import GadgetFinder, GadgetClassifier, GadgetSolver
 
 log = getLogger(__name__)
 __all__ = ['ROP']
+
+MAGIC_NUMBER = 0xDDDDDDDD
 
 class Padding(object):
     """
@@ -227,6 +231,7 @@ class ROP(object):
             self.gadgets[gad.address] = gad
 
         self.initialized = False
+        self.builded = False
 
        
     def __init_classify_and_solver(self):
@@ -253,11 +258,11 @@ class ROP(object):
             for d, dlist in self._global_delete_gadget.items():
                 for i in dlist:
                     self.gadget_graph[d].remove(i)
-
+            
             self.Verify = GadgetSolver(arch=self.arch)
 
             self.initialized = True
-
+    
     
     def setRegisters(self, values):
         """
@@ -318,30 +323,77 @@ class ROP(object):
 
         if isinstance(values, list):
             values = dict(values)
+        
+        def md5_insns(path):
+            out = []
+            for gadget in path:
+                out.append("; ".join(gadget.insns)) 
+
+            return hashlib.md5("|".join(out)).hexdigest()
+
+        def record(ropgadget, reg):
+            for gadgets in ropgadget:
+                all_gadget_address = 0
+                all_gadget_address = md5_insns(gadgets)
+
+                ropgadgets[all_gadget_address] = gadgets
+
+                if all_gadget_address not in gadget_list.keys():
+                    gadget_list[all_gadget_address] = set()
+                gadget_list[all_gadget_address].add(reg)
+
 
         for reg, value in values.items():
 
             ropgadget = self.search_path("sp", [reg])
-            if ropgadget:
-                ropgadget = ropgadget[0]
 
             if not ropgadget:
                 log.error("Gadget to reg %s not found!" % reg)
 
             # Combine the same gadgets together.
-            last_gadget_address = ropgadget[-1].address
-            ropgadgets[last_gadget_address] = ropgadget
-            if last_gadget_address not in gadget_list.keys():
-                gadget_list[last_gadget_address] = []
-            gadget_list[last_gadget_address].append(reg)
+            record(ropgadget, reg)
 
-        for address, regs in gadget_list.items():
-            ropgadget = ropgadgets[address]
+        ip_reg = {"i386" : "eip",
+                  "amd64": "rip",
+                  "arm"  : "pc"}
+        this_ip = ip_reg[self.arch]
+        
+        #ip_gadget = self.search_path("sp", [this_ip])
+        #if ip_gadget:
+            #record(ip_gadget, this_ip)
+        
+        reg_without_ip = values.keys()
+        #reg_with_ip    = values.keys() + [this_ip]
+
+        gadget_filter = {}
+        # Combine the same gadgets together.
+        gadget_list = collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-len(t[1]), 
+                      len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
+
+        middle_set = set(reg_without_ip)
+        for all_gadget_address, regs in gadget_list.items():
+            if all(i in middle_set for i in regs):
+                gadget_filter[all_gadget_address] = regs
+                middle_set -= regs 
+
+
+        for all_gadget_address, regs in gadget_filter.items():
+            ropgadget = ropgadgets[all_gadget_address]
             conditions = {}
             for reg in regs:
-                conditions[reg] = values[reg]
-            sp, stack = self.Verify.verify_path(ropgadget, conditions)
-            out.append(("_".join(regs), (ropgadget, sp, stack)))
+                if reg == this_ip:
+                    last_mnemonic = ropgadget[-1].insns[-1].split(" ")[0].strip()
+                    if "blx" == last_mnemonic or "call" == last_mnemonic:
+                        # Magic number, will be substitute
+                        conditions[this_ip] = MAGIC_NUMBER
+                else:
+                    conditions[reg] = values[reg]
+
+
+            result = self.Verify.verify_path(ropgadget, conditions)
+            if result:
+                sp, stack = result
+                out.append(("_".join(regs), (ropgadget, sp, stack)))
 
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
@@ -369,16 +421,21 @@ class ROP(object):
             ropgadget, move, _ = result
             sp = 0
             know = {}
+            compensate = 0
             for gadget in ropgadget:
                 if sp != 0:
                     know[sp] = gadget
+                    if gadget.insns[-1].split(" ")[0].strip() == "call":
+                        know[sp + 1] = Padding()
+                        move += self.align
+
                 sp += gadget.move - self.align
 
             ropgadget, _, stack_result = result
             outrop.append(ropgadget[0])
 
             i = 0
-            while i < (move - self.align):
+            while i <= (move - self.align ):
                 if i in stack_result.keys():
                     temp_packed = 0
                     for j in range(self.align):
@@ -469,6 +526,9 @@ class ROP(object):
                 ``address: description`` for each address on the stack,
                 starting at ``base``.
         """
+        if self.builded:
+            return self.build_result
+
         if base is None:
             base = self.base or 0
 
@@ -527,7 +587,11 @@ class ROP(object):
 
                 for register, gadgets in setRegisters.items():
                     regs        = register.split("_")
-                    values      = [registers[reg] for reg in regs]
+                    values      = []
+                    for reg in regs:
+                        if reg != "pc" and reg != "eip" and reg != "rip":
+                            values.append(registers[reg])
+
                     slot_indexs  = [slot.args.index(v) for v in values]
                     description = " | ".join([self.describe(value) for value in values]) \
                             or 'arg%r' % slot_indexs
@@ -536,8 +600,11 @@ class ROP(object):
 
                 if address != stack.next:
                     stack.describe(slot.name)
-
-                stack.append(slot.target)
+                
+                if MAGIC_NUMBER in stack:
+                    stack[stack.index(MAGIC_NUMBER)] = slot.target
+                else:
+                    stack.append(slot.target)
 
                 # For any remaining arguments, put them on the stack
                 stackArguments = slot.args[len(slot.abi.register_arguments):]
@@ -617,6 +684,9 @@ class ROP(object):
             # Also, it may work in pwnlib.util.packing.flat()
             else:
                 pass
+
+        self.builded = True
+        self.build_result = stack
 
         return stack
 
@@ -923,6 +993,7 @@ class ROP(object):
                     gadget_graph[gad_1].add(gad_2)
 
         return gadget_graph
+
 
     def __build_top_sort(self, graph):
         """
