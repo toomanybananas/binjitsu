@@ -4,7 +4,6 @@ import re
 import os
 import types
 import hashlib
-import capstone
 import tempfile
 import operator
 
@@ -28,6 +27,11 @@ log = getLogger(__name__)
 MAX_SIZE = 100
 
 class GadgetMapper(object):
+    r"""Get the gadgets mapper in symbolic expressions.
+    
+    This is the base class for GadgetSolver and GadgetClassifier.
+
+    """
 
     def __init__(self, arch="i386"):
         '''Base class which can symbolic execution gadget instructions.
@@ -76,6 +80,8 @@ class GadgetMapper(object):
         The CPU used is x86, but that may be changed really easily, so no biggie.
 
         Taken from https://github.com/0vercl0k/stuffz/blob/master/look_for_gadgets_with_equations.py'''
+        from amoco.arch.arm.v7.env import internals
+        internals["isetstate"] = 0
         p = amoco.system.raw.RawExec(
             amoco.system.core.DataIO(code), self.cpu
         )
@@ -92,23 +98,40 @@ class GadgetMapper(object):
                 p.cpu.i_RET(None, block.map)
             try:
                 mp >>= block.map
-                return mp
             except:
-                return None
+                mp = None
 
+        return mp
 
 class GadgetClassifier(GadgetMapper):
+    r"""Classify gadgets to decide its sp_move value and regs relationship.
+
+    Example:
+
+    .. code-block:: python
+        gc = GadgetClassifier("amd64")
+        newGadget = gc.classify(oldGadget)
+
+    """
 
     def __init__(self, outs=[], arch="i386"):
         super(GadgetClassifier, self).__init__(arch)
         self.outs = outs
     
-    def __call__(self, gadget):
-        gad = self.classify(gadget)
-        if gad:
-            outs.append(gad)
-
     def classify(self, gadget):
+        """Classify gadgets, get the regs relationship, and sp move. 
+
+        Arguments:
+            gadget(Gadget object), with sp == 0 and regs = {}
+
+        Return:
+            Gadget object with correct sp move value and regs relationship
+
+        Example:
+            assume gadget_test = Gadget(address:0x1000, [u'pop rdi', u'ret'], {}, 0x0) 
+            >>> classify(gadget_test) 
+            Gadget(address:0x1000, [u'pop rdi', u'ret'], {"rdi":Mem(reg: "rsp", offset: 0, size:64)}, 0x10) 
+        """
         address = gadget.address
         insns   = gadget.insns
         bytes   = gadget.bytes
@@ -116,15 +139,15 @@ class GadgetClassifier(GadgetMapper):
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes)
         if not gadget_mapper:
             return None
-        
-        reg = {}
+
+        regs = {}
         move = 0
         ip_move = 0
         for reg_out, _ in gadget_mapper:
             if reg_out._is_ptr or reg_out._is_mem:
                 return None
 
-            if "flags" in str(reg_out):
+            if "flags" in str(reg_out) or "apsr" in str(reg_out):
                 continue
 
             inputs = gadget_mapper[reg_out]
@@ -133,10 +156,18 @@ class GadgetClassifier(GadgetMapper):
                 move = extract_offset(inputs)[1]
                 continue
 
-            if "ip" in str(reg_out) or "pc" in str(reg_out):
+            if "ip" in str(reg_out):
                 if inputs._is_mem:
                     ip_move = inputs.a.disp 
                     continue
+
+            if "pc" in str(reg_out):
+                if isinstance(inputs, mem):
+                    ip_move = inputs.a.disp
+                elif isinstance(inputs, op):
+                    ip_move = extract_offset(inputs)[1]
+                    continue
+
 
             if inputs._is_mem:
                 offset = inputs.a.disp 
@@ -148,16 +179,16 @@ class GadgetClassifier(GadgetMapper):
                     reg_str = str(reg_mem)
 
                 reg_size = inputs.size
-                reg[str(reg_out)] = Mem(reg_str, offset, reg_size)
+                regs[str(reg_out)] = Mem(reg_str, offset, reg_size)
 
             elif inputs._is_reg:
-                reg[str(reg_out)] = str(inputs)
+                regs[str(reg_out)] = str(inputs)
 
             elif inputs._is_cst:
-                reg[str(reg_out)] = inputs.value
+                regs[str(reg_out)] = inputs.value
 
             elif isinstance(inputs, list) or isinstance(inputs, types.GeneratorType):
-                reg[str(reg_out)] = [str(locations_of(i) for i in inputs)]
+                regs[str(reg_out)] = [str(locations_of(i) for i in inputs)]
 
             else:
                 allregs = locations_of(inputs)
@@ -165,15 +196,25 @@ class GadgetClassifier(GadgetMapper):
                     allregs = [str(i) for i in allregs]
                 elif isinstance(allregs, reg):
                     allregs = str(allregs)
-                reg[str(reg_out)] = allregs
+                regs[str(reg_out)] = allregs
         
         if ip_move == (move - self.align):
-            return Gadget(address, insns, reg, move, bytes)
+            return Gadget(address, insns, regs, move, bytes)
 
         return None
 
 
 class GadgetSolver(GadgetMapper):
+    r"""Solver a gadget path to satisfy some conditions.
+
+    Example:
+
+    .. code-block:: python
+        gs = GadgetSolver("amd64") 
+        conditions = {"rdi" : 0xbeefdead}
+        sp_move, stack_result = gs.verify_path(gadget_path, conditions)
+
+    """
 
     def __init__(self, arch="i386"):
         super(GadgetSolver, self).__init__(arch)
@@ -186,6 +227,24 @@ class GadgetSolver(GadgetMapper):
         return None
 
     def verify_path(self, path, conditions={}):
+        """Solve a gadget path, get the sp move and which values should be on stack. 
+
+        Arguments:
+            
+            path(list): Gadgets arrangement from reg1/mem to reg2
+                ["pop ebx; ret", "mov eax, ebx; ret"]
+
+            conditions(dict): the result we want.
+                {"eax": 0xbeefdead}, after gadgets in path executed, we want to assign 0xbeefdead to eax.
+
+        Returns:
+            
+            tuple with two items
+            first item is sp move
+            second is which value should on stack, before gadgets in path execute
+            For the example above, we will get:
+                (12, OrderedDict{0:"\xad", 1:"\xde", 2:"\xef", 3:"\xbe"})
+        """
         concate_bytes = "".join([gadget.bytes for gadget in path])
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(concate_bytes)
 
@@ -199,7 +258,6 @@ class GadgetSolver(GadgetMapper):
             if str(reg) in conditions.keys():
                 model = self._prove(conditions[str(reg)] == constraint.to_smtlib())
                 if not model:
-                    log.error("Can not satisfy..")
                     return None
 
                 sp_reg = locations_of(gadget_mapper[reg])
@@ -219,18 +277,24 @@ class GadgetSolver(GadgetMapper):
 
         return (move, stack_changed)
 
-    def __call__(self, path, conditions={}):
-        move, stack = self.verify_path(path, conditions)
-
-        if not stack:
-            return None
-
-        return (move, sorted_stack)
-
 
 class GadgetFinder(object):
+    r"""Finding gadgets for specified elfs. 
+
+    Example:
+
+    .. code-block:: python
+        
+        elf = ELF('ropasaurusrex')
+        gf = GadgetFinder(elf)
+        gadgets = gf.load_gadgets()
+
+    """
 
     def __init__(self, elfs, gadget_filter="all", depth=10):
+        
+        import capstone 
+        self.capstone = capstone
 
         if isinstance(elfs, ELF):
             filename = elfs.file.name
@@ -283,23 +347,21 @@ class GadgetFinder(object):
 
 
         arch_mode_gadget = {
-                "i386"  : (capstone.CS_ARCH_X86, capstone.CS_MODE_32,  x86_gadget[gadget_filter]),
-                "amd64" : (capstone.CS_ARCH_X86, capstone.CS_MODE_64,  x86_gadget[gadget_filter]),
-                "arm"   : (capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM, arm_gadget[gadget_filter]),
+                "i386"  : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_32,  x86_gadget[gadget_filter]),
+                "amd64" : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_64,  x86_gadget[gadget_filter]),
+                "arm"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM, arm_gadget[gadget_filter]),
                 }
         if self.elfs[0].arch not in arch_mode_gadget.keys():
             raise Exception("Architecture not supported.")
 
         self.arch, self.mode, self.gadget_re = arch_mode_gadget[self.elfs[0].arch]
         self.need_filter = False
-        if self.arch == capstone.CS_ARCH_X86 and len(self.elfs[0].file.read()) >= MAX_SIZE*1000:
+        if self.arch == self.capstone.CS_ARCH_X86 and len(self.elfs[0].file.read()) >= MAX_SIZE*1000:
             self.need_filter = True
 
 
     def load_gadgets(self):
         """Load all ROP gadgets for the selected ELF files
-        New feature: 1. Without ROPgadget
-                     2. Extract all gadgets, including ret, jmp, call, syscall, sysenter.
         """
 
         out = []
@@ -308,8 +370,6 @@ class GadgetFinder(object):
             for seg in elf.executable_segments:
                 gadgets += self.__find_all_gadgets(seg, self.gadget_re, elf)
             
-            if self.arch == capstone.CS_ARCH_X86:
-                gadgets = self.__passCleanX86(gadgets)
             gadgets = self.__deduplicate(gadgets)
 
             #build for cache
@@ -336,7 +396,8 @@ class GadgetFinder(object):
         cache = self.__cache_load(elf)
         if cache:
             for address, bytes in cache.items():
-                md = capstone.Cs(self.arch, self.mode)
+                md = self.capstone.Cs(self.arch, self.mode)
+                md.detail = True
                 decodes = md.disasm(bytes, address)
                 insns = []
                 for decode in decodes:
@@ -352,7 +413,8 @@ class GadgetFinder(object):
             allRef = [m.start() for m in re.finditer(gad[C_OP], section.data())]
             for ref in allRef:
                 for i in range(self.depth):
-                    md = capstone.Cs(self.arch, self.mode)
+                    md = self.capstone.Cs(self.arch, self.mode)
+                    md.detail = True
                     back_bytes = i * gad[C_ALIGN]
                     section_start = ref - back_bytes
                     start_address = section.header.p_vaddr + section_start
@@ -363,6 +425,7 @@ class GadgetFinder(object):
                                         start_address)
 
                     insns = []
+                    decodes = list(decodes)
                     for decode in decodes:
                         insns.append((decode.mnemonic + " " + decode.op_str).strip())
                     
@@ -373,6 +436,9 @@ class GadgetFinder(object):
                             address = start_address
                             bytes   = section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]]
                             onegad = Gadget(address, insns, reg, move, bytes)
+                            if not self.__passClean(decodes):
+                                continue
+
                             if self.need_filter:
                                 allgadgets += self.__filter_for_big_binary_or_elf32(onegad)
                             else:
@@ -395,7 +461,7 @@ class GadgetFinder(object):
         sysenter = re.compile(r'^sysenter$')
 
         valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
-            [pop,add,ret,leave,mov,int80,syscall,sysenter]))
+            [pop,add,ret,leave,xchg,mov,int80,syscall,sysenter]))
 
         insns = gadget.insns
         if all(map(valid, insns)):
@@ -403,42 +469,40 @@ class GadgetFinder(object):
 
         return new
 
-    def __checkInstructionBlackListedX86(self, insts):
-        bl = ["db", "int3", "call", "jmp", "nop", "jne", "jg", "jge"]
-        for inst in insts:
-            for b in bl:
-                if inst.split(" ")[0] == b:
-                    return True 
-        return False
-
-    def __checkMultiBr(self, insts, br):
+    def __checkMultiBr(self, decodes, branch_groups):
+        """Caculate branch number for __passClean().
+        """
         count = 0
-        for inst in insts:
-            if inst.split()[0] in br:
-                count += 1
+        if decodes[-1].mnemonic == "pop":
+            count += 1
+        for inst in decodes:
+            for group in branch_groups:
+                if group in inst.groups:
+                    count += 1
         return count
+    
+    def __passClean(self, decodes, multibr=False):
+        """Filter gadgets with two more blocks.
+        """
+        
+        branch_groups = [self.capstone.CS_GRP_JUMP, 
+                         self.capstone.CS_GRP_CALL, 
+                         self.capstone.CS_GRP_RET, 
+                         self.capstone.CS_GRP_INT, 
+                         self.capstone.CS_GRP_IRET]
 
-    def __passCleanX86(self, gadgets, multibr=False):
-        new = []
-        # Only extract "ret" gadgets now.
-        if self.gadget_filter == "all":
-            br = ["ret", "int", "sysenter", "jmp", "call"]
-        else:
-            br = [self.gadget_filter]
-        for gadget in gadgets:
-            insts = gadget.insns
-            if len(insts) == 1 and insts[0].split(" ")[0] not in br:
-                continue
-            if insts[-1].split(" ")[0] not in br:
-                continue
-            if self.__checkInstructionBlackListedX86(insts):
-                continue
-            if not multibr and self.__checkMultiBr(insts, br) > 1:
-                continue
-            if len([m.start() for m in re.finditer("ret", "; ".join(insts))]) > 1:
-                continue
-            new += [gadget]
-        return new
+        # "pop {.*pc}" for arm
+        # Because Capstone cannot identify this instruction as Branch instruction
+        pop_pc = re.compile('^pop \{.*pc\}') 
+        last_instr = (decodes[-1].mnemonic + " " + decodes[-1].op_str)
+
+        if (not pop_pc.match(last_instr)) and (not (set(decodes[-1].groups) & set(branch_groups))):
+            return False
+
+        if not multibr and self.__checkMultiBr(decodes, branch_groups) > 1:
+            return False
+        
+        return True
     
     def __deduplicate(self, gadgets):
         new, insts = [], []

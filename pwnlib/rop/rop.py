@@ -28,7 +28,6 @@ from .gadgetfinder import GadgetFinder, GadgetClassifier, GadgetSolver
 log = getLogger(__name__)
 __all__ = ['ROP']
 
-
 class Padding(object):
     """
     Placeholder for exactly one pointer-width of padding.
@@ -227,49 +226,91 @@ class ROP(object):
         for gad in gads:
             self.gadgets[gad.address] = gad
 
+        self.initialized = False
+
        
-    def init_classify_and_solver(self):
+    def __init_classify_and_solver(self):
         """
         Classify and solver gadgets as needed.
         Because of `amoco` has a large initialization-time penalty.
         """
-        gads = copy.deepcopy(self.gadgets)
-        self.gadgets= {}
-        gc = GadgetClassifier(arch=self.arch)
-        for gadget in gads.values():
-            cl = gc.classify(gadget)
-            if cl:
-                self.gadgets[cl.address] = cl
+        if not self.initialized:
+            gads = copy.deepcopy(self.gadgets)
+            self.gadgets= {}
+            
+            gc = GadgetClassifier(arch=self.arch)
+            for gadget in gads.values():
+                cl = gc.classify(gadget)
+                if cl:
+                    self.gadgets[cl.address] = cl
+            self.gadget_graph = self.build_graph(self.gadgets)
 
-        self.gadget_graph = self.build_graph()
+            self._global_delete_gadget = {}
+            ggh = copy.deepcopy(self.gadget_graph)
 
-        self._global_delete_gadget = {}
-        ggh = copy.deepcopy(self.gadget_graph)
+            self._top_sorted = self.__build_top_sort(ggh)
 
-        self._top_sorted = self.__build_top_sort(ggh)
+            for d, dlist in self._global_delete_gadget.items():
+                for i in dlist:
+                    self.gadget_graph[d].remove(i)
 
-        for d, dlist in self._global_delete_gadget.items():
-            for i in dlist:
-                self.gadget_graph[d].remove(i)
+            self.Verify = GadgetSolver(arch=self.arch)
 
-        self.Verify = GadgetSolver(arch=self.arch)
+            self.initialized = True
 
-
-
+    
     def setRegisters(self, values):
         """
-        Returns an OrderedDict of addresses/values which will set the specified
-        register context.
+        Provides a sequence of ROP gadgets which will set the desired register
+        values.
 
         Arguments:
-            registers(dict): Dictionary of ``{register name: value}``
 
-        Returns:
-            An OrderedDict of ``{register: sequence of gadgets, values, etc.}``.
+            values(dict):
+                Mapping of ``{register name: value}``.  The contents of
+                ``value`` can be any object, not just an integer.
+
+        Return Value:
+
+            Returns a ``collections.OrderedDict`` object which is in the
+            correct order of operations.
+
+            The keys are the register names, and the values are the sequence
+            of stack values necessary to set the register.
+
+        Example:
+
+            Assume we have the following gadgets.
+
+            1000: pop eax; ret
+            2000: mov ebx, eax; ret
+            3000: pop ecx; ret
+            4000: mov edx, ebx; ret
+
+            For simple cases, the order doesn't matter.
+            (Note: The display for OrderedDict is ugly, sorry!)
+
+            >>> set_registers({'eax': 1})
+            OrderedDict([('eax', [1000, 1])])
+            OrderedDict([('eax', [1000], 8, [(0, 1)])])
+            >>> set_registers({'eax': 1, 'ecx': 0})
+            OrderedDict([('eax', [1000, 1]), ('ecx', [3000, 0])])
+            >>> set_registers({'ebx': None})
+            OrderedDict([('ebx', [1000, None, 2000])])
+
+            For complex cases, there is only one possible ordering:
+
+            >>> set_registers({'eax': 1, 'ebx': None})
+            OrderedDict([('ebx', [1000, None, 2000]), ('eax', [1000, 1])])
+
+            Sometimes, it may not be possible/
+
+            >>> set_registers({'esi': 0})
+            <exception>
         """
         
         # init GadgetSolver and GadgetClassify
-        self.init_classify_and_solver()
+        self.__init_classify_and_solver()
 
         out = []
         ropgadgets = {}
@@ -304,12 +345,22 @@ class ROP(object):
 
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
-
-        ordered_out = self.flat_as_stack(ordered_out)
+        ordered_out = self.flat_as_on_stack(ordered_out)
 
         return ordered_out
 
-    def flat_as_stack(self, ordered_dict):
+    def flat_as_on_stack(self, ordered_dict):
+        """Convert the values in ordered_dict to the sequence of stack values.
+
+        Arguments:
+            ordered_dict(OrderedDict):
+                key is register, value is a tuple, its format as follows:
+                    (Gadget_object, sp_move(int), value_on_stack(OrderedDict))
+
+        Return:
+            out(list):
+                A sequence of stack values.
+        """
 
         out = []
 
@@ -318,15 +369,14 @@ class ROP(object):
             ropgadget, move, _ = result
             sp = 0
             know = {}
-            for gad in ropgadget:
+            for gadget in ropgadget:
                 if sp != 0:
-                    know[sp / self.align] = gad
-                sp += gad.move - self.align
+                    know[sp] = gadget
+                sp += gadget.move - self.align
 
             ropgadget, _, stack_result = result
             outrop.append(ropgadget[0])
 
-            temp_combine = ""
             i = 0
             while i < (move - self.align):
                 if i in stack_result.keys():
@@ -705,153 +755,6 @@ class ROP(object):
         """Returns: Raw bytes of the ROP chain"""
         return self.chain()
 
-    def __get_cachefile_name(self, elf):
-        basename = os.path.basename(elf.file.name)
-        sha256 = hashlib.sha256(elf.get_data()).hexdigest()
-        cachedir = os.path.join(tempfile.gettempdir(), 'binjitsu-rop-cache')
-        if not os.path.exists(cachedir):
-            os.mkdir(cachedir)
-        return os.path.join(cachedir, sha256)
-
-    def __cache_load(self, elf):
-        filename = self.__get_cachefile_name(elf)
-        if not os.path.exists(filename):
-            return None
-        log.info_once('Loaded cached gadgets for %r' % elf.file.name)
-        gadgets = eval(file(filename).read())
-        gadgets = {k - elf.load_addr + elf.address:v for k, v in gadgets.items()}
-        return gadgets
-
-    def __cache_save(self, elf, data):
-        data = {k + elf.load_addr - elf.address:v for k, v in data.items()}
-        file(self.__get_cachefile_name(elf), 'w+').write(repr(data))
-
-    def __load(self):
-        """Load all ROP gadgets for the selected ELF files"""
-        #
-        # We accept only instructions that look like these.
-        #
-        # - leave
-        # - pop reg
-        # - add $sp, value
-        # - ret
-        #
-        # Currently, ROPgadget does not detect multi-byte "C2" ret.
-        # https://github.com/JonathanSalwan/ROPgadget/issues/53
-        #
-
-        pop   = re.compile(r'^pop (.{3})')
-        add   = re.compile(r'^add .sp, (\S+)$')
-        ret   = re.compile(r'^ret$')
-        leave = re.compile(r'^leave$')
-        int80 = re.compile(r'int +0x80')
-        syscall = re.compile(r'^syscall$')
-        sysenter = re.compile(r'^sysenter$')
-
-        #
-        # Validation routine
-        #
-        # >>> valid('pop eax')
-        # True
-        # >>> valid('add rax, 0x24')
-        # False
-        # >>> valid('add esp, 0x24')
-        # True
-        #
-        valid = lambda insn: any(map(lambda pattern: pattern.match(insn), [pop,add,ret,leave,int80,syscall,sysenter]))
-
-        #
-        # Currently, ropgadget.args.Args() doesn't take any arguments, and pulls
-        # only from sys.argv.  Preserve it through this call.  We also
-        # monkey-patch sys.stdout to suppress output from ropgadget.
-        #
-        argv = sys.argv
-        stdout = sys.stdout
-
-        class Wrapper:
-
-            def __init__(self, fd):
-                self._fd = fd
-
-            def write(self, s):
-                pass
-
-            def __getattr__(self, k):
-                return self._fd.__getattribute__(k)
-
-        gadgets = {}
-        for elf in self.elfs:
-            cache = self.__cache_load(elf)
-            if cache:
-                gadgets.update(cache)
-                continue
-            log.info_once('Loading gadgets for %r' % elf.path)
-            try:
-                sys.stdout = Wrapper(sys.stdout)
-                import ropgadget
-                sys.argv = ['ropgadget', '--binary', elf.path, '--only', 'sysenter|syscall|int|add|pop|leave|ret', '--nojop']
-                args = ropgadget.args.Args().getArgs()
-                core = ropgadget.core.Core(args)
-                core.do_binary(elf.path)
-                core.do_load(0)
-            finally:
-                sys.argv = argv
-                sys.stdout = stdout
-
-            elf_gadgets = {}
-            for gadget in core._Core__gadgets:
-                address = gadget['vaddr'] - elf.load_addr + elf.address
-                insns = [ g.strip() for g in gadget['gadget'].split(';') ]
-                if all(map(valid, insns)):
-                    elf_gadgets[address] = insns
-
-            self.__cache_save(elf, elf_gadgets)
-            gadgets.update(elf_gadgets)
-
-        #
-        # For each gadget we decided to keep, find out how much it moves the stack,
-        # and log which registers it modifies.
-        #
-        self.gadgets = {}
-        self.pivots = {}
-        frame_regs = ['ebp', 'esp'] if self.align == 4 else ['rbp', 'rsp']
-        for addr, insns in gadgets.items():
-            sp_move = 0
-            regs = []
-            for insn in insns:
-                if pop.match(insn):
-                    regs.append(pop.match(insn).group(1))
-                    sp_move += self.align
-                elif add.match(insn):
-                    sp_move += int(add.match(insn).group(1), 16)
-                elif ret.match(insn):
-                    sp_move += self.align
-                elif leave.match(insn):
-                    #
-                    # HACK: Since this modifies ESP directly, this should
-                    #       never be returned as a 'normal' ROP gadget that
-                    #       simply 'increments' the stack.
-                    #
-                    #       As such, the 'move' is set to a very large value,
-                    #       to prevent .search() from returning it unless $sp
-                    #       is specified as a register.
-                    #
-                    sp_move += 9999999999
-                    regs += frame_regs
-
-            # Permit duplicates, because blacklisting bytes in the gadget
-            # addresses may result in us needing the dupes.
-            self.gadgets[addr] = Gadget(addr, insns, regs, sp_move)
-
-            # Don't use 'pop esp' for pivots
-            if not set(['rsp', 'esp']) & set(regs):
-                self.pivots[sp_move] = addr
-
-        leave = self.search(regs=frame_regs, order='regs')
-        if leave and leave.regs != frame_regs:
-            leave = None
-        self.leave = leave
-
     def __repr__(self):
         return 'ROP(%r)' % self.elfs
 
@@ -969,28 +872,51 @@ class ROP(object):
 
         return call
 
-    def build_graph(self):
+    def build_graph(self, gadgets):
         '''Build gadgets graph, gadget as vertex, reg as edge.
+
+        Arguments:
+            
+            gadgets(dict):
+                { address: Gadget object }
+
+        Returns: dict, Graph in adjacency list format. 
+
+        Example:
+            
+            Assume we have the following gadgets.
+
+            Gadget01 ==> 1000: pop eax; ret
+            Gadget02 ==> 2000: mov ebx, eax; ret
+            Gadget03 ==> 3000: pop ecx; ret
+            Gadget04 ==> 4000: mov edx, ebx; ret
+
+            >>> build_graph(gadgets)
+            {Gadget01 : [Gadget02], 
+             Gadget02 : [Gadget04],
+             Gadget03 : [],
+             Gadget04 : []}
+            
         '''
         gadget_graph = {}
-        for gad_1 in self.gadgets.values():
+        for gad_1 in gadgets.values():
             gadget_graph[gad_1] = set()
             outputs = []
             for i in gad_1.regs.keys():
-                if isinstance(i, str) and "[" not in i:
-                    outputs.append(i[-2:])
+                if isinstance(i, str):
+                    outputs.append(i)
 
-            for gad_2 in self.gadgets.values():
+            for gad_2 in gadgets.values():
                 if gad_1 == gad_2:
                     continue
                 inputs=[]
                 for i in gad_2.regs.values():
-                    if isinstance(i, str) and "[" not in i:
-                        inputs.append(i[-2:])
+                    if isinstance(i, str):
+                        inputs.append(i)
                     if isinstance(i, list):
                         for j in i:
-                            if isinstance(j, str) and "[" not in i:
-                                inputs.append(j[-2:])
+                            if isinstance(j, str):
+                                inputs.append(j)
 
                 inter = set(inputs) & set(outputs)
                 if len(inter) > 0:
@@ -1008,7 +934,7 @@ class ROP(object):
                 A simple example : graph = {'eax': ['ebx'], 'ebx': ['eax'], 'edx': ['eax']}
                 May be cycles in graph. we need to handle it.
 
-        Return Value:
+        Returns:
             top_sorted(list):
                 such as: ["edx", "eax", "ebx"]
         """
@@ -1053,22 +979,20 @@ class ROP(object):
         for g, indeg in indegree.items():
             if indeg > 1:
                 for k, glist in graph.items():
-                    for h in glist:
+                    for h in glist.copy():
                         if h == g:
-                            #delete the edge of a cirle.
                             graph[k].remove(h)
-
                             #record the deleted edge of cirles.
                             if k not in self._global_delete_gadget.keys():
                                 self._global_delete_gadget[k] = set()
                             self._global_delete_gadget[k].add(h)
                             
-                            # Recurisve top sorting.
-                            last_result = self.__build_top_sort(graph)
-                            if not last_result:
-                                last_result = []
+        # Recurisve top sorting.
+        last_result = self.__build_top_sort(graph)
+        if not last_result:
+            last_result = []
 
-                            return top_sorted + last_result
+        return top_sorted + last_result
 
 
     def search_path(self, src, regs):
@@ -1085,7 +1009,6 @@ class ROP(object):
                     gadget_srcs.extend([str(x) for x in i])
                 elif isinstance(i, str):
                     gadget_srcs.append(i)
-
             if any([src in i for i in gadget_srcs]):
                 start.add(gadget)
 
@@ -1107,14 +1030,14 @@ class ROP(object):
         results = reduce(set.intersection, dstlist)
         for r in results:
             end.add(asm_instr_dict[r])
-
+        
         paths = []
         if len(start) != 0 and len(end) != 0:
             for s in list(start):
                 for e in list(end):
-                    path = self.__find_path(self.gadget_graph, s, e)
+                    path = self.__dfs(self.gadget_graph, s, e)
                     paths += list(path)
-       
+         
         # Give every reg a random num
         cond = {}
         for reg in regs:
@@ -1136,8 +1059,8 @@ class ROP(object):
         return paths
 
 
-    def __find_path(self, graph, start, end, path=[]):
-        '''DFS for find a path in gadget graph.
+    def __dfs(self, graph, start, end, path=[]):
+        '''DFS for find a path in any graph.
         '''
         path = path + [start]
 
@@ -1147,6 +1070,6 @@ class ROP(object):
             return
         for node in graph[start]:
             if node not in path:
-                for new_path in self.__find_path(graph, node, end, path):
+                for new_path in self.__dfs(graph, node, end, path):
                     if new_path:
                         yield new_path
