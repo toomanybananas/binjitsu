@@ -435,7 +435,7 @@ class ROP(object):
             outrop.append(ropgadget[0])
 
             i = 0
-            while i <= (move - self.align ):
+            while i < (move - self.align ):
                 if i in stack_result.keys():
                     temp_packed = 0
                     for j in range(self.align):
