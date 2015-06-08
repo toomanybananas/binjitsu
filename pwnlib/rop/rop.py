@@ -24,7 +24,7 @@ from ..util     import packing
 from .          import srop
 from .call      import Call, StackAdjustment, AppendedArgument, CurrentStackPointer, NextGadgetAddress
 from .gadgets   import Gadget, Mem
-from .gadgetfinder  import GadgetFinder, GadgetClassifier, GadgetSolver
+from .gadgetfinder  import GadgetFinder, GadgetSolver
 from ..util.packing import *
 
 log = getLogger(__name__)
@@ -227,6 +227,8 @@ class ROP(object):
         gf = GadgetFinder(elfs, "all")
         self.gadgets = gf.load_gadgets() 
 
+        self.Verify = gf.solver
+
         self.initialized = False
         self.builded = False
 
@@ -237,13 +239,6 @@ class ROP(object):
         Because of `amoco` has a large initialization-time penalty.
         """
         if not self.initialized:
-            gc = GadgetClassifier(arch=self.arch)
-
-            for gadget in self.gadgets.values():
-                if (not gadget.regs) and (not gadget.move):
-                    result = gc.classify(gadget)
-                    if not result:
-                        del self.gadgets[gadget.address]
             
             self.gadget_graph = self.build_graph(self.gadgets)
 
@@ -256,7 +251,6 @@ class ROP(object):
                 for i in dlist:
                     self.gadget_graph[d].remove(i)
             
-            self.Verify = GadgetSolver(arch=self.arch)
 
             self.initialized = True
     

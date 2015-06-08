@@ -15,7 +15,6 @@ import amoco
 import amoco.system.raw
 import amoco.system.core
 import amoco.cas.smt
-import transaction
 
 from BTrees.OOBTree import OOBTree
 from amoco.cas.expressions import *
@@ -36,19 +35,27 @@ class GadgetMapper(object):
 
     """
 
-    def __init__(self, arch="i386"):
+    def __init__(self, arch, mode):
         '''Base class which can symbolic execution gadget instructions.
         '''
+        from capstone import CS_ARCH_X86, CS_ARCH_ARM, CS_MODE_32, CS_MODE_64, CS_MODE_ARM, CS_MODE_THUMB
         self.arch = arch
         
-        if arch == "i386":
+        self.for_arm = False
+        if arch == CS_ARCH_X86 and mode == CS_MODE_32:
             import amoco.arch.x86.cpu_x86 as cpu 
             self.align = 4
-        elif arch == "amd64":
+        elif arch == CS_ARCH_X86 and mode == CS_MODE_64:
             import amoco.arch.x64.cpu_x64 as cpu 
             self.align = 8
-        elif arch == "arm":
+        elif arch == CS_ARCH_ARM and mode == CS_MODE_ARM:
             import amoco.arch.arm.cpu_armv7 as cpu 
+            self.internals = 0
+            self.align = 4
+        elif arch == CS_ARCH_ARM and mode == CS_MODE_THUMB:
+            import amoco.arch.arm.cpu_armv7 as cpu 
+            self.for_arm = True
+            self.internals = 1
             self.align = 4
         else:
             raise Exception("Unsupported archtecture %s." % arch)
@@ -83,8 +90,10 @@ class GadgetMapper(object):
         The CPU used is x86, but that may be changed really easily, so no biggie.
 
         Taken from https://github.com/0vercl0k/stuffz/blob/master/look_for_gadgets_with_equations.py'''
-        from amoco.arch.arm.v7.env import internals
-        internals["isetstate"] = 0
+        if self.for_arm:
+            from amoco.arch.arm.v7.env import internals
+            internals["isetstate"] = self.internals
+
         p = amoco.system.raw.RawExec(
             amoco.system.core.DataIO(code), self.cpu
         )
@@ -117,9 +126,8 @@ class GadgetClassifier(GadgetMapper):
 
     """
 
-    def __init__(self, outs=[], arch="i386"):
-        super(GadgetClassifier, self).__init__(arch)
-        self.outs = outs
+    def __init__(self, arch, mode):
+        super(GadgetClassifier, self).__init__(arch, mode)
     
     def classify(self, gadget):
         """Classify gadgets, get the regs relationship, and sp move. 
@@ -142,6 +150,7 @@ class GadgetClassifier(GadgetMapper):
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes)
         if not gadget_mapper:
             return None
+
         regs = {}
         move = 0
         ip_move = 0
@@ -206,17 +215,12 @@ class GadgetClassifier(GadgetMapper):
                     allregs = str(allregs)
                 regs[str(reg_out)] = allregs
         
-        if "pop" in insns[-1] and ip_move == (move - self.align):
+        if "pop" in insns[-1] and ip_move != (move - self.align):
             return None
         elif not regs and not move:
             return None
         else:
-            gadget.regs = regs
-            gadget.move = move
-            gadget._p_changed = True
-            transaction.commit()
-
-            return gadget
+            return Gadget(address, insns, regs, move, bytes)
 
 
 
@@ -226,14 +230,14 @@ class GadgetSolver(GadgetMapper):
     Example:
 
     .. code-block:: python
-        gs = GadgetSolver("amd64") 
+        gs = GadgetSolver(CS_ARCH_X86, CS_MODE_64) 
         conditions = {"rdi" : 0xbeefdead}
         sp_move, stack_result = gs.verify_path(gadget_path, conditions)
 
     """
 
-    def __init__(self, arch="i386"):
-        super(GadgetSolver, self).__init__(arch)
+    def __init__(self, arch, mode):
+        super(GadgetSolver, self).__init__(arch, mode)
 
     def _prove(self, expression):
         s = Solver()
@@ -361,19 +365,38 @@ class GadgetFinder(object):
         all_arm_gadget = reduce(lambda x, y: x + y, arm_gadget.values())
         arm_gadget["all"] = all_arm_gadget
 
-
-        arch_mode_gadget = {
-                "i386"  : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_32,  x86_gadget[gadget_filter]),
-                "amd64" : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_64,  x86_gadget[gadget_filter]),
-                "arm"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM, arm_gadget[gadget_filter]),
+        arm_thumb = {
+                "ret": [["[\x00-\xff]{1}\xbd", 2, 2], # pop {,pc}
+                    ],
+                #"bx" : [["[\x00\x08\x10\x18\x20\x28\x30\x38\x40\x48\x70]{1}\x47", 2, 2], # bx   reg
+                    #],
+                #"blx": [["[\x80\x88\x90\x98\xa0\xa8\xb0\xb8\xc0\xc8\xf0]{1}\x47", 2, 2], # blx  reg
+                    #],
+                "svc": [["\x00-\xff]{1}\xef", 2, 2], # svc
+                    ],
                 }
-        if self.elfs[0].arch not in arch_mode_gadget.keys():
-            raise Exception("Architecture not supported.")
+        all_arm_gadget = reduce(lambda x, y: x + y, arm_thumb.values())
+        arm_thumb["all"] = arm_thumb 
 
-        self.arch, self.mode, self.gadget_re = arch_mode_gadget[self.elfs[0].arch]
+
+        self.arch_mode_gadget = {
+                "i386"  : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_32,     x86_gadget[gadget_filter]),
+                "amd64" : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_64,     x86_gadget[gadget_filter]),
+                "arm": (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM,    arm_gadget[gadget_filter]),
+                "thumb"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_THUMB,  arm_thumb[gadget_filter]),
+                }
+        if self.elfs[0].arch not in self.arch_mode_gadget.keys():
+            raise Exception("Architecture not supported.")
+        
+        bin_arch = self.elfs[0].arch
+
+        self.arch, self.mode, self.gadget_re = self.arch_mode_gadget[bin_arch]
         self.need_filter = False
         if self.arch == self.capstone.CS_ARCH_X86 and len(self.elfs[0].file.read()) >= MAX_SIZE*1000:
             self.need_filter = True
+
+        self.classifier = GadgetClassifier(self.arch, self.mode)
+        self.solver     = GadgetSolver(self.arch, self.mode)
 
 
 
@@ -387,11 +410,12 @@ class GadgetFinder(object):
             gadget_db = GadgetDatabase(elf)
             gads = gadget_db.load_gadgets()
 
+
             if not gads:
                 gg = []
                 for seg in elf.executable_segments:
                     gg += self.__find_all_gadgets(seg, self.gadget_re, elf)
-                
+
                 gg = self.__deduplicate(gg)
                 out.update(gadget_db.save_gadgets(gg))
 
@@ -441,8 +465,12 @@ class GadgetFinder(object):
                                 continue
 
                             if self.need_filter:
-                                allgadgets += self.__filter_for_big_binary_or_elf32(onegad)
-                            else:
+                                onegad = self.__filter_for_big_binary_or_elf32(onegad)
+
+                            if onegad:
+                                onegad = self.classifier.classify(onegad)
+
+                            if onegad: 
                                 allgadgets += [onegad]
 
         return allgadgets
@@ -548,6 +576,7 @@ class GadgetDatabase(object):
         return root
 
     def save_gadgets(self, gadgets):
+        import transaction
 
         if not self.db.has_key("gadgets"):
             self.db['gadgets'] = OOBTree()
