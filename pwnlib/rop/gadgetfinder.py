@@ -15,11 +15,14 @@ import amoco
 import amoco.system.raw
 import amoco.system.core
 import amoco.cas.smt
+import transaction
 
+from BTrees.OOBTree import OOBTree
 from amoco.cas.expressions import *
 from z3          import *
 from collections import OrderedDict
 from operator    import itemgetter
+
 
 log = getLogger(__name__)
 
@@ -203,14 +206,18 @@ class GadgetClassifier(GadgetMapper):
                     allregs = str(allregs)
                 regs[str(reg_out)] = allregs
         
-
-        if "pop" in insns[-1]:
-            if ip_move == (move - self.align):
-                return Gadget(address, insns, regs, move, bytes)
+        if "pop" in insns[-1] and ip_move == (move - self.align):
+            return None
+        elif not regs and not move:
+            return None
         else:
-            return Gadget(address, insns, regs, move, bytes)
+            gadget.regs = regs
+            gadget.move = move
+            gadget._p_changed = True
+            transaction.commit()
 
-        return None
+            return gadget
+
 
 
 class GadgetSolver(GadgetMapper):
@@ -369,25 +376,27 @@ class GadgetFinder(object):
             self.need_filter = True
 
 
+
     def load_gadgets(self):
         """Load all ROP gadgets for the selected ELF files
         """
 
-        out = []
+        out = OOBTree()
         for elf in self.elfs:
-            gadgets = []
-            for seg in elf.executable_segments:
-                gadgets += self.__find_all_gadgets(seg, self.gadget_re, elf)
-            
-            gadgets = self.__deduplicate(gadgets)
 
-            #build for cache
-            data = {}
-            for gad in gadgets:
-                data[gad.address] = gad.bytes
-            self.__cache_save(elf, data)
+            gadget_db = GadgetDatabase(elf)
+            gads = gadget_db.load_gadgets()
 
-            out += gadgets
+            if not gads:
+                gg = []
+                for seg in elf.executable_segments:
+                    gg += self.__find_all_gadgets(seg, self.gadget_re, elf)
+                
+                gg = self.__deduplicate(gg)
+                out.update(gadget_db.save_gadgets(gg))
+
+            else:
+                out.update(gads)
 
         return out
 
@@ -401,23 +410,6 @@ class GadgetFinder(object):
         
         allgadgets = []
 
-        # Recover gadgets from cached file.
-        cache = self.__cache_load(elf)
-        if cache:
-            for address, bytes in cache.items():
-                md = self.capstone.Cs(self.arch, self.mode)
-                md.detail = True
-                decodes = md.disasm(bytes, address)
-                insns = []
-                for decode in decodes:
-                    insns.append((decode.mnemonic + " " + decode.op_str).strip())
-                if len(insns) > 0:
-                    reg = {}
-                    move = 0
-                    allgadgets.append(Gadget(address, insns, reg, move, bytes))
-            return allgadgets
-        
-        # If no cached gadgets, find as ROPgadget do.
         for gad in gadget_re:
             allRef = [m.start() for m in re.finditer(gad[C_OP], section.data())]
             for ref in allRef:
@@ -526,33 +518,55 @@ class GadgetFinder(object):
             new += [gadget]
         return new
 
-    def __get_cachefile_name(self, elf):
+
+class GadgetDatabase(object):
+    """A Gadget database object to store gadget easily.
+    """
+
+    def __init__(self, elf):
+        self.elfname = elf.file.name
+        self.dbname = self.get_db_name(elf)
+        self.db     = self.get_db()
+
+    def get_db_name(self, elf):
         basename = os.path.basename(elf.file.name)
         sha256   = hashlib.sha256(elf.get_data()).hexdigest()
-        cachedir  = os.path.join(tempfile.gettempdir(), 'binjitsu-rop-cache')
+        cachedir = os.path.join(tempfile.gettempdir(), 'binjitsu-rop-cache')
 
         if not os.path.exists(cachedir):
             os.mkdir(cachedir)
 
         return os.path.join(cachedir, sha256)
 
-    def __cache_load(self, elf):
-        filename = self.__get_cachefile_name(elf)
+    def get_db(self):
+        import ZODB, ZODB.FileStorage
 
-        if not os.path.exists(filename):
+        storage = ZODB.FileStorage.FileStorage(self.dbname)
+        db = ZODB.DB(storage)
+        connection = db.open()
+        root = connection.root()
+        return root
+
+    def save_gadgets(self, gadgets):
+
+        if not self.db.has_key("gadgets"):
+            self.db['gadgets'] = OOBTree()
+
+        gadget_db = self.db["gadgets"]
+        for gadget in gadgets:
+            gadget_db[gadget.address] = gadget
+
+        transaction.commit()
+        return gadget_db
+
+    def load_gadgets(self):
+
+        if not self.db.has_key("gadgets"):
             return None
 
-        log.info_once("Loaded cached gadgets for %r" % elf.file.name)
-        gadgets = eval(file(filename).read())
+        if len(self.db["gadgets"]) == 0:
+            return None
+        
+        log.info_once("Loaded cached gadgets for %r" % self.elfname)
 
-        # Gadgets are saved with their 'original' load addresses.
-        gadgets = {k-elf.load_addr+elf.address:v for k,v in gadgets.items()}
-
-        return gadgets
-
-    def __cache_save(self, elf, data):
-        # Gadgets need to be saved with their 'original' load addresses.
-        data = {k+elf.load_addr-elf.address:v for k,v in data.items()}
-
-        file(self.__get_cachefile_name(elf),'w+').write(repr(data))
-
+        return self.db["gadgets"]

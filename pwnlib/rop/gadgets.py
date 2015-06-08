@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
+from persistent import Persistent
 
-class Gadget(object):
+class Gadget(Persistent):
     """
     Describes a ROP gadget
     """
@@ -89,7 +90,7 @@ class Gadget(object):
     def __hash__(self):
         return hash((self.address, "; ".join(self.insns), self.move))
 
-class Mem(object):
+class Mem(Persistent):
     """
     Describes a Mem postion for gadget.
 

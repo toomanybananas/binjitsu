@@ -225,10 +225,7 @@ class ROP(object):
 
         #Find all gadgets
         gf = GadgetFinder(elfs, "all")
-        gads = gf.load_gadgets() 
-        self.gadgets= {}
-        for gad in gads:
-            self.gadgets[gad.address] = gad
+        self.gadgets = gf.load_gadgets() 
 
         self.initialized = False
         self.builded = False
@@ -240,14 +237,14 @@ class ROP(object):
         Because of `amoco` has a large initialization-time penalty.
         """
         if not self.initialized:
-            gads = copy.deepcopy(self.gadgets)
-            self.gadgets= {}
-            
             gc = GadgetClassifier(arch=self.arch)
-            for gadget in gads.values():
-                cl = gc.classify(gadget)
-                if cl:
-                    self.gadgets[cl.address] = cl
+
+            for gadget in self.gadgets.values():
+                if (not gadget.regs) and (not gadget.move):
+                    result = gc.classify(gadget)
+                    if not result:
+                        del self.gadgets[gadget.address]
+            
             self.gadget_graph = self.build_graph(self.gadgets)
 
             self._global_delete_gadget = {}
@@ -358,12 +355,7 @@ class ROP(object):
                   "arm"  : "pc"}
         this_ip = ip_reg[self.arch]
         
-        #ip_gadget = self.search_path("sp", [this_ip])
-        #if ip_gadget:
-            #record(ip_gadget, this_ip)
-        
         reg_without_ip = values.keys()
-        #reg_with_ip    = values.keys() + [this_ip]
 
         gadget_filter = {}
         # Combine the same gadgets together.
@@ -376,18 +368,11 @@ class ROP(object):
                 gadget_filter[all_gadget_address] = regs
                 middle_set -= regs 
 
-
         for all_gadget_address, regs in gadget_filter.items():
             ropgadget = ropgadgets[all_gadget_address]
             conditions = {}
             for reg in regs:
-                if reg == this_ip:
-                    last_mnemonic = ropgadget[-1].insns[-1].split(" ")[0].strip()
-                    if "blx" == last_mnemonic or "call" == last_mnemonic:
-                        # Magic number, will be substitute
-                        conditions[this_ip] = MAGIC_NUMBER
-                else:
-                    conditions[reg] = values[reg]
+                conditions[reg] = values[reg]
 
 
             result = self.Verify.verify_path(ropgadget, conditions)
@@ -1045,10 +1030,10 @@ class ROP(object):
         
         if len(graph) == 0:
             return top_sorted
-
+        
         # Recursive top sort.
         for g, indeg in indegree.items():
-            if indeg > 1:
+            if indeg >= 1:
                 for k, glist in graph.items():
                     for h in glist.copy():
                         if h == g:
