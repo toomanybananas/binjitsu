@@ -333,12 +333,12 @@ class GadgetFinder(object):
                 "ret":      [["\xc3", 1, 1],               # ret
                             ["\xc2[\x00-\xff]{2}", 3, 1],  # ret <imm>
                             ],
-                "jmp":      [["\xff[\x20\x21\x22\x23\x26\x27]{1}", 2, 1], # jmp  [reg]
-                            ["\xff[\xe0\xe1\xe2\xe3\xe4\xe6\xe7]{1}", 2, 1], # jmp  [reg]
-                            ["\xff[\x10\x11\x12\x13\x16\x17]{1}", 2, 1], # jmp  [reg]
-                            ],
-                "call":     [["\xff[\xd0\xd1\xd2\xd3\xd4\xd6\xd7]{1}", 2, 1],  # call  [reg]
-                            ],
+                #"jmp":      [["\xff[\x20\x21\x22\x23\x26\x27]{1}", 2, 1], # jmp  [reg]
+                            #["\xff[\xe0\xe1\xe2\xe3\xe4\xe6\xe7]{1}", 2, 1], # jmp  [reg]
+                            #["\xff[\x10\x11\x12\x13\x16\x17]{1}", 2, 1], # jmp  [reg]
+                            #],
+                #"call":     [["\xff[\xd0\xd1\xd2\xd3\xd4\xd6\xd7]{1}", 2, 1],  # call  [reg]
+                            #],
                 "int":      [["\xcd\x80", 2, 1], # int 0x80
                             ],
                 "sysenter": [["\x0f\x34", 2, 1], # sysenter
@@ -351,10 +351,10 @@ class GadgetFinder(object):
         arm_gadget = {
                 "ret":  [["[\x00-\xff]{1}[\x80-\x8f]{1}\xbd\xe8", 4, 4],       # pop {,pc}
                         ],
-                "bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
-                        ],
-                "blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
-                        ],
+                #"bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
+                        #],
+                #"blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
+                        #],
                 "svc":  [["\x00-\xff]{3}\xef", 4, 4] # svc
                         ],
                 }
