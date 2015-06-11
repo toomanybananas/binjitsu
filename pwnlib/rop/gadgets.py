@@ -81,7 +81,7 @@ class Gadget(Persistent):
         if type(other) is type(self):
             same_address    = self.address  == other.address
             same_move       = self.move     == other.move
-            same_insns      = "; ".join(self.insns)    == "; ".join(other.insns) 
+            same_insns      = self.insns    == other.insns
 
             return same_address and same_insns and same_move
         else:

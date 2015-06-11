@@ -562,7 +562,6 @@ class GadgetDatabase(object):
         self.db     = self.get_db()
 
     def get_db_name(self, elf):
-        basename = os.path.basename(elf.file.name)
         sha256   = hashlib.sha256(elf.get_data()).hexdigest()
         cachedir = os.path.join(tempfile.gettempdir(), 'binjitsu-rop-cache')
 
