@@ -2,6 +2,7 @@
 
 import re
 import os
+import copy
 import types
 import hashlib
 import tempfile
@@ -41,7 +42,6 @@ class GadgetMapper(object):
         from capstone import CS_ARCH_X86, CS_ARCH_ARM, CS_MODE_32, CS_MODE_64, CS_MODE_ARM, CS_MODE_THUMB
         self.arch = arch
         
-        self.for_arm = False
         if arch == CS_ARCH_X86 and mode == CS_MODE_32:
             import amoco.arch.x86.cpu_x86 as cpu 
             self.align = 4
@@ -50,19 +50,16 @@ class GadgetMapper(object):
             self.align = 8
         elif arch == CS_ARCH_ARM and mode == CS_MODE_ARM:
             import amoco.arch.arm.cpu_armv7 as cpu 
-            self.internals = 0
             self.align = 4
         elif arch == CS_ARCH_ARM and mode == CS_MODE_THUMB:
             import amoco.arch.arm.cpu_armv7 as cpu 
-            self.for_arm = True
-            self.internals = 1
             self.align = 4
         else:
             raise Exception("Unsupported archtecture %s." % arch)
 
         self.cpu = cpu
 
-    def sym_exec_gadget_and_get_mapper(self, code):
+    def sym_exec_gadget_and_get_mapper(self, code, type=0):
         '''This function gives you a ``mapper`` object from assembled `code`. 
         `code` will basically be our assembled gadgets.
 
@@ -90,14 +87,17 @@ class GadgetMapper(object):
         The CPU used is x86, but that may be changed really easily, so no biggie.
 
         Taken from https://github.com/0vercl0k/stuffz/blob/master/look_for_gadgets_with_equations.py'''
-        if self.for_arm:
-            from amoco.arch.arm.v7.env import internals
-            internals["isetstate"] = self.internals
+        from amoco.arch.arm.v7.env import internals
+        internals["isetstate"] = type
 
         p = amoco.system.raw.RawExec(
             amoco.system.core.DataIO(code), self.cpu
         )
-        blocks = list(amoco.lsweep(p).iterblocks())
+        try:
+            blocks = list(amoco.lsweep(p).iterblocks())
+        except:
+            return None
+
         if len(blocks) == 0:
             return None
         #assert(len(blocks) > 0)
@@ -108,6 +108,7 @@ class GadgetMapper(object):
             # is actually 'the inside' of the call, which is not the case with ROP gadgets
             if block.instr[-1].mnemonic.lower() == 'call':
                 p.cpu.i_RET(None, block.map)
+
             try:
                 mp >>= block.map
             except:
@@ -146,8 +147,9 @@ class GadgetClassifier(GadgetMapper):
         address = gadget.address
         insns   = gadget.insns
         bytes   = gadget.bytes
-         
-        gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes)
+        
+        instruction_state = address & 1
+        gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes, type=instruction_state)
         if not gadget_mapper:
             return None
 
@@ -266,7 +268,8 @@ class GadgetSolver(GadgetMapper):
                 (12, OrderedDict{0:"\xad", 1:"\xde", 2:"\xef", 3:"\xbe"})
         """
         concate_bytes = "".join([gadget.bytes for gadget in path])
-        gadget_mapper = self.sym_exec_gadget_and_get_mapper(concate_bytes)
+        instruction_state = path[0].address & 1
+        gadget_mapper = self.sym_exec_gadget_and_get_mapper(concate_bytes, type=instruction_state)
 
         stack_changed = []
         move = 0
@@ -337,12 +340,12 @@ class GadgetFinder(object):
                 "ret":      [["\xc3", 1, 1],               # ret
                             ["\xc2[\x00-\xff]{2}", 3, 1],  # ret <imm>
                             ],
-                #"jmp":      [["\xff[\x20\x21\x22\x23\x26\x27]{1}", 2, 1], # jmp  [reg]
-                            #["\xff[\xe0\xe1\xe2\xe3\xe4\xe6\xe7]{1}", 2, 1], # jmp  [reg]
-                            #["\xff[\x10\x11\x12\x13\x16\x17]{1}", 2, 1], # jmp  [reg]
-                            #],
-                #"call":     [["\xff[\xd0\xd1\xd2\xd3\xd4\xd6\xd7]{1}", 2, 1],  # call  [reg]
-                            #],
+                "jmp":      [["\xff[\x20\x21\x22\x23\x26\x27]{1}", 2, 1], # jmp  [reg]
+                            ["\xff[\xe0\xe1\xe2\xe3\xe4\xe6\xe7]{1}", 2, 1], # jmp  [reg]
+                            ["\xff[\x10\x11\x12\x13\x16\x17]{1}", 2, 1], # jmp  [reg]
+                            ],
+                "call":     [["\xff[\xd0\xd1\xd2\xd3\xd4\xd6\xd7]{1}", 2, 1],  # call  [reg]
+                            ],
                 "int":      [["\xcd\x80", 2, 1], # int 0x80
                             ],
                 "sysenter": [["\x0f\x34", 2, 1], # sysenter
@@ -355,10 +358,10 @@ class GadgetFinder(object):
         arm_gadget = {
                 "ret":  [["[\x00-\xff]{1}[\x80-\x8f]{1}\xbd\xe8", 4, 4],       # pop {,pc}
                         ],
-                #"bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
-                        #],
-                #"blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
-                        #],
+                "bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
+                        ],
+                "blx":  [["[\x30-\x39\x3e]{1}\xff\x2f\xe1", 4, 4],  # blx  reg
+                        ],
                 "svc":  [["\x00-\xff]{3}\xef", 4, 4] # svc
                         ],
                 }
@@ -368,21 +371,21 @@ class GadgetFinder(object):
         arm_thumb = {
                 "ret": [["[\x00-\xff]{1}\xbd", 2, 2], # pop {,pc}
                     ],
-                #"bx" : [["[\x00\x08\x10\x18\x20\x28\x30\x38\x40\x48\x70]{1}\x47", 2, 2], # bx   reg
-                    #],
-                #"blx": [["[\x80\x88\x90\x98\xa0\xa8\xb0\xb8\xc0\xc8\xf0]{1}\x47", 2, 2], # blx  reg
-                    #],
+                "bx" : [["[\x00\x08\x10\x18\x20\x28\x30\x38\x40\x48\x70]{1}\x47", 2, 2], # bx   reg
+                    ],
+                "blx": [["[\x80\x88\x90\x98\xa0\xa8\xb0\xb8\xc0\xc8\xf0]{1}\x47", 2, 2], # blx  reg
+                    ],
                 "svc": [["\x00-\xff]{1}\xef", 2, 2], # svc
                     ],
                 }
-        all_arm_gadget = reduce(lambda x, y: x + y, arm_thumb.values())
-        arm_thumb["all"] = arm_thumb 
+        all_arm_thumb = reduce(lambda x, y: x + y, arm_thumb.values())
+        arm_thumb["all"] = all_arm_thumb 
 
 
         self.arch_mode_gadget = {
                 "i386"  : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_32,     x86_gadget[gadget_filter]),
                 "amd64" : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_64,     x86_gadget[gadget_filter]),
-                "arm": (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM,    arm_gadget[gadget_filter]),
+                "arm"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM,    arm_gadget[gadget_filter]),
                 "thumb"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_THUMB,  arm_thumb[gadget_filter]),
                 }
         if self.elfs[0].arch not in self.arch_mode_gadget.keys():
@@ -392,10 +395,9 @@ class GadgetFinder(object):
 
         self.arch, self.mode, self.gadget_re = self.arch_mode_gadget[bin_arch]
         self.need_filter = False
-        if self.arch == self.capstone.CS_ARCH_X86 and len(self.elfs[0].file.read()) >= MAX_SIZE*1000:
+        if len(self.elfs[0].file.read()) >= MAX_SIZE*1000:
             self.need_filter = True
 
-        self.classifier = GadgetClassifier(self.arch, self.mode)
         self.solver     = GadgetSolver(self.arch, self.mode)
 
 
@@ -404,7 +406,7 @@ class GadgetFinder(object):
         """Load all ROP gadgets for the selected ELF files
         """
 
-        out = OOBTree()
+        out = {}
         for elf in self.elfs:
 
             gadget_db = GadgetDatabase(elf)
@@ -414,10 +416,22 @@ class GadgetFinder(object):
             if not gads:
                 gg = []
                 for seg in elf.executable_segments:
-                    gg += self.__find_all_gadgets(seg, self.gadget_re, elf)
+                    self.classifier = GadgetClassifier(self.arch, self.mode)
+                    gg += self.__find_all_gadgets(seg, self.gadget_re, elf, self.arch, self.mode)
+
+                    if self.arch == self.capstone.CS_ARCH_ARM:
+                        arch, mode, gadget_re = self.arch_mode_gadget["thumb"]
+                        self.classifier = GadgetClassifier(arch, mode)
+                        gg += self.__find_all_gadgets(seg, gadget_re, elf, arch, mode)
 
                 gg = self.__deduplicate(gg)
-                out.update(gadget_db.save_gadgets(gg))
+
+                for gadget in gg:
+                    out[gadget.address] = gadget
+                
+                gg2 = copy.deepcopy(gg)
+                gadget_db.save_gadgets(gg2)
+
 
             else:
                 out.update(gads)
@@ -425,7 +439,7 @@ class GadgetFinder(object):
         return out
 
 
-    def __find_all_gadgets(self, section, gadget_re, elf):
+    def __find_all_gadgets(self, section, gadget_re, elf, arch, mode):
         '''Find gadgets like ROPgadget do.
         '''
         C_OP = 0
@@ -439,7 +453,7 @@ class GadgetFinder(object):
             allRef = [m.start() for m in re.finditer(gad[C_OP], section.data())]
             for ref in allRef:
                 for i in range(self.depth):
-                    md = self.capstone.Cs(self.arch, self.mode)
+                    md = self.capstone.Cs(arch, mode)
                     md.detail = True
                     back_bytes = i * gad[C_ALIGN]
                     section_start = ref - back_bytes
@@ -460,6 +474,9 @@ class GadgetFinder(object):
                             reg     = {}
                             move    = 0
                             address = start_address
+                            if mode == self.capstone.CS_MODE_THUMB:
+                                address = address | 1
+
                             bytes   = section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]]
                             onegad = Gadget(address, insns, reg, move, bytes)
                             insns_hash = hashlib.sha1("; ".join(insns)).hexdigest()
@@ -469,7 +486,10 @@ class GadgetFinder(object):
                                 continue
 
                             if self.need_filter:
-                                onegad = self.__filter_for_big_binary_or_elf32(onegad)
+                                if self.arch == self.capstone.CS_ARCH_X86:
+                                    onegad = self.__filter_for_x86_big_binary(onegad)
+                                elif self.arch == self.capstone.CS_ARCH_ARM:
+                                    onegad = self.__filter_for_arm_big_binary(onegad)
 
                             insns_hashtable.append(insns_hash)
                             if onegad:
@@ -480,7 +500,7 @@ class GadgetFinder(object):
 
         return allgadgets
 
-    def __filter_for_big_binary_or_elf32(self, gadget):
+    def __filter_for_x86_big_binary(self, gadget):
         '''Filter gadgets for big binary.
         '''
         new = None
@@ -496,6 +516,26 @@ class GadgetFinder(object):
 
         valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
             [pop,add,ret,leave,xchg,mov,int80,syscall,sysenter]))
+
+        insns = gadget.insns
+        if all(map(valid, insns)):
+            new = gadget
+
+        return new
+
+    def __filter_for_arm_big_binary(self, gadget):
+        '''Filter gadgets for big binary.
+        '''
+        new = None
+        poppc = re.compile(r'^pop \{.*pc\}')
+        blx   = re.compile(r'^blx .{2}')
+        #bx    = re.compile(r'^bx ..$')
+        #poplr = re.compile(r'^pop {.*lr}')
+        #mov   = re.compile(r'^mov (.{2}), (.{2})')
+        svc   = re.compile(r'^svc$')
+
+        valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
+            [poppc,blx,svc]))
 
         insns = gadget.insns
         if all(map(valid, insns)):
@@ -533,10 +573,14 @@ class GadgetFinder(object):
         pop_pc = re.compile('^pop \{.*pc\}') 
         last_instr = (decodes[-1].mnemonic + " " + decodes[-1].op_str)
 
-        if (not pop_pc.match(last_instr)) and (not (set(decodes[-1].groups) & set(branch_groups))):
+        if len(decodes) > 4:
             return False
 
-        if not multibr and self.__checkMultiBr(decodes, branch_groups) > 1:
+        if (not pop_pc.match(last_instr)) and (not (set(decodes[-1].groups) & set(branch_groups))):
+            return False
+        
+        branch_num = self.__checkMultiBr(decodes, branch_groups)
+        if not multibr and (branch_num > 2 or branch_num == 0):
             return False
         
         return True
@@ -560,6 +604,7 @@ class GadgetDatabase(object):
         self.elfname = elf.file.name
         self.dbname = self.get_db_name(elf)
         self.db     = self.get_db()
+        self.bin_addr = elf.address
 
     def get_db_name(self, elf):
         sha256   = hashlib.sha256(elf.get_data()).hexdigest()
@@ -582,6 +627,9 @@ class GadgetDatabase(object):
     def save_gadgets(self, gadgets):
         import transaction
 
+        for gadget in gadgets:
+            gadget.address -= self.bin_addr
+
         if not self.db.has_key("gadgets"):
             self.db['gadgets'] = OOBTree()
 
@@ -590,9 +638,9 @@ class GadgetDatabase(object):
             gadget_db[gadget.address] = gadget
 
         transaction.commit()
-        return gadget_db
 
     def load_gadgets(self):
+        out = {}
 
         if not self.db.has_key("gadgets"):
             return None
@@ -601,5 +649,11 @@ class GadgetDatabase(object):
             return None
         
         log.info_once("Loaded cached gadgets for %r" % self.elfname)
+        
+        gadgets = self.db["gadgets"].values()
 
-        return self.db["gadgets"]
+        for gadget in gadgets:
+            gadget.address += self.bin_addr
+            out[gadget.address] = gadget
+         
+        return out
