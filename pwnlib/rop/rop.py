@@ -30,7 +30,6 @@ from ..util.packing import *
 log = getLogger(__name__)
 __all__ = ['ROP']
 
-MAGIC_NUMBER = 0xDDDDDDDD
 
 class Padding(object):
     """
@@ -580,10 +579,7 @@ class ROP(object):
                 if address != stack.next:
                     stack.describe(slot.name)
                 
-                if MAGIC_NUMBER in stack:
-                    stack[stack.index(MAGIC_NUMBER)] = slot.target
-                else:
-                    stack.append(slot.target)
+                stack.append(slot.target)
 
                 # For any remaining arguments, put them on the stack
                 stackArguments = slot.args[len(slot.abi.register_arguments):]
