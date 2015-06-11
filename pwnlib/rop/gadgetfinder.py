@@ -433,6 +433,7 @@ class GadgetFinder(object):
         C_ALIGN = 2
         
         allgadgets = []
+        insns_hashtable = []
 
         for gad in gadget_re:
             allRef = [m.start() for m in re.finditer(gad[C_OP], section.data())]
@@ -461,12 +462,15 @@ class GadgetFinder(object):
                             address = start_address
                             bytes   = section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]]
                             onegad = Gadget(address, insns, reg, move, bytes)
+
+                            if hashlib.sha1("; ".join(insns)).hexdigest() in insns_hashtable:
+                                continue
                             if not self.__passClean(decodes):
                                 continue
 
                             if self.need_filter:
                                 onegad = self.__filter_for_big_binary_or_elf32(onegad)
-
+                            insns_hashtable.append(hashlib.sha1("; ".join(insns)).hexdigest())
                             if onegad:
                                 onegad = self.classifier.classify(onegad)
 
@@ -478,7 +482,7 @@ class GadgetFinder(object):
     def __filter_for_big_binary_or_elf32(self, gadget):
         '''Filter gadgets for big binary.
         '''
-        new = []
+        new = None
         pop   = re.compile(r'^pop (.{3})')
         add   = re.compile(r'^add .sp, (\S+)$')
         ret   = re.compile(r'^ret$')
@@ -494,7 +498,7 @@ class GadgetFinder(object):
 
         insns = gadget.insns
         if all(map(valid, insns)):
-            new.append(gadget)
+            new = gadget
 
         return new
 
