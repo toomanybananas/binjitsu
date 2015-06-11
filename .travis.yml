@@ -12,6 +12,11 @@ before_install:
   - source .travis_ssh_setup.sh
   - source .travis_install.sh
 install:
+  - pip install matplotlib pygments pyparsing ply zodb numpy
+  - pip install git+https://github.com/zardus/z3.git@py-setup
+  - pip install git+https://github.com/bdcht/grandalf
+  - pip install git+https://github.com/bdcht/crysp
+  - pip install git+https://github.com/bdcht/amoco
   - pip install -e .
   - pip install -r docs/requirements.txt
 before_script:
