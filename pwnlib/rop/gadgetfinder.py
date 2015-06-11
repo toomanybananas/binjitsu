@@ -59,7 +59,7 @@ class GadgetMapper(object):
 
         self.cpu = cpu
 
-    def sym_exec_gadget_and_get_mapper(self, code, type=0):
+    def sym_exec_gadget_and_get_mapper(self, code, state=0):
         '''This function gives you a ``mapper`` object from assembled `code`. 
         `code` will basically be our assembled gadgets.
 
@@ -88,7 +88,7 @@ class GadgetMapper(object):
 
         Taken from https://github.com/0vercl0k/stuffz/blob/master/look_for_gadgets_with_equations.py'''
         from amoco.arch.arm.v7.env import internals
-        internals["isetstate"] = type
+        internals["isetstate"] = state
 
         p = amoco.system.raw.RawExec(
             amoco.system.core.DataIO(code), self.cpu
@@ -149,7 +149,7 @@ class GadgetClassifier(GadgetMapper):
         bytes   = gadget.bytes
         
         instruction_state = address & 1
-        gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes, type=instruction_state)
+        gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes, state=instruction_state)
         if not gadget_mapper:
             return None
 
@@ -269,7 +269,7 @@ class GadgetSolver(GadgetMapper):
         """
         concate_bytes = "".join([gadget.bytes for gadget in path])
         instruction_state = path[0].address & 1
-        gadget_mapper = self.sym_exec_gadget_and_get_mapper(concate_bytes, type=instruction_state)
+        gadget_mapper = self.sym_exec_gadget_and_get_mapper(concate_bytes, state=instruction_state)
 
         stack_changed = []
         move = 0

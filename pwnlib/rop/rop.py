@@ -504,6 +504,8 @@ class ROP(object):
                 ``address: description`` for each address on the stack,
                 starting at ``base``.
         """
+        # This is a flag to avoid rebuilding the ROP chain. 
+        # This could save some times.
         if self.builded:
             return self.build_result
 
