@@ -462,15 +462,16 @@ class GadgetFinder(object):
                             address = start_address
                             bytes   = section.data()[ref - (i*gad[C_ALIGN]):ref+gad[C_SIZE]]
                             onegad = Gadget(address, insns, reg, move, bytes)
-
-                            if hashlib.sha1("; ".join(insns)).hexdigest() in insns_hashtable:
+                            insns_hash = hashlib.sha1("; ".join(insns)).hexdigest()
+                            if insns_hash in insns_hashtable:
                                 continue
                             if not self.__passClean(decodes):
                                 continue
 
                             if self.need_filter:
                                 onegad = self.__filter_for_big_binary_or_elf32(onegad)
-                            insns_hashtable.append(hashlib.sha1("; ".join(insns)).hexdigest())
+
+                            insns_hashtable.append(insns_hash)
                             if onegad:
                                 onegad = self.classifier.classify(onegad)
 
