@@ -41,7 +41,8 @@ Each of the ``binjitsu`` modules is documented here.
    memleak
    replacements
    rop
-   srop
+   rop/*
+   runner
    shellcraft
    shellcraft/*
    term
@@ -51,6 +52,11 @@ Each of the ``binjitsu`` modules is documented here.
    ui
    useragents
    util/*
+
+.. toctree::
+   :hidden:
+
+   testexample
 
 Indices and tables
 ==================

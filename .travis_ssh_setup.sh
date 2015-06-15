@@ -4,8 +4,6 @@
 #
 # All of the "conditional sudo" is to do container-based builds on
 # Travis which are much, much faster.
-set -x
-
 U=travis
 H=/home/$U
 
@@ -48,10 +46,9 @@ EOF
 cat >> ~/.ssh/config <<EOF
 
 Host example.pwnme
-    User travis
+    User $U
     HostName 127.0.0.1
     IdentityFile ~/.ssh/$U
 EOF
 
-ssh-keyscan -vvv -t rsa example.pwnme >>~/.ssh/known_hosts
 ssh -o "StrictHostKeyChecking no" -vvvv travis@example.pwnme id

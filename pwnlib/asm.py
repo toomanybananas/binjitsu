@@ -357,7 +357,25 @@ __start:
 '''
 
 @LocalContext
-def make_elf(data, vma = None, strip=True):
+def make_elf_from_assembly(assembly, vma = 0x400000):
+    r"""
+    Builds an ELF file with the specified assembly as its
+    executable code.
+
+    Arguments:
+
+        assembly(str): Assembly
+
+    Returns:
+
+        The path to the assembled ELF.
+    """
+    path = asm(assembly, vma = vma, extract = False)
+    os.chmod(path, 0755)
+    return path
+
+@LocalContext
+def make_elf(data, vma = None, strip=True, extract=True):
     r"""
     Builds an ELF file with the specified binary data as its
     executable code.
@@ -422,6 +440,10 @@ def make_elf(data, vma = None, strip=True):
             _run([which_binutils('objcopy'), '-Sg', step3])
             _run([which_binutils('strip'), '--strip-unneeded', step3])
 
+        if not extract:
+            os.chmod(step3, 0755)
+            return step3
+
         with open(step3, 'r') as f:
             return f.read()
     except Exception:
@@ -430,8 +452,8 @@ def make_elf(data, vma = None, strip=True):
         shutil.rmtree(tmpdir)
 
 @LocalContext
-def asm(shellcode, vma = 0):
-    r"""asm(code, vma = 0, ...) -> str
+def asm(shellcode, vma = 0, extract = True):
+    r"""asm(code, vma = 0, extract = True, ...) -> str
 
     Runs :func:`cpp` over a given shellcode and then assembles it into bytes.
 
@@ -444,6 +466,9 @@ def asm(shellcode, vma = 0):
     Arguments:
       shellcode(str): Assembler code to assemble.
       vma(int):       Virtual memory address of the beginning of assembly
+      extract(bool):  Extract the raw assembly bytes from the assembled
+                      file.  If ``False``, returns the path to an ELF file
+                      with the assembly embedded.
 
     Kwargs:
         Any arguments/properties that can be set on ``context``
@@ -484,6 +509,9 @@ def asm(shellcode, vma = 0):
 
         _run(assembler + ['-o', step2, step1])
 
+        if not vma and not extract:
+            vma = 0x400000
+
         if not vma:
             shutil.copy(step2, step3)
 
@@ -502,6 +530,9 @@ def asm(shellcode, vma = 0):
         else:
             shutil.copy(step2, step3)
 
+        if not extract:
+            return step3
+
         _run(objcopy + [step3, step4])
 
         with open(step4) as fd:
@@ -514,7 +545,7 @@ def asm(shellcode, vma = 0):
         return result
 
 @LocalContext
-def disasm(data, vma = 0):
+def disasm(data, vma = 0, byte = True, offset = True):
     """disasm(data, ...) -> str
 
     Disassembles a bytestring into human readable assembler.
@@ -528,6 +559,8 @@ def disasm(data, vma = 0):
     Arguments:
       data(str): Bytestring to disassemble.
       vma(int): Passed through to the --adjust-vma argument of objdump
+      byte(bool): Include the hex-printed bytes in the disassembly
+      offset(bool): Include the virtual memory address in the disassembly
 
     Kwargs:
       Any arguments/properties that can be set on ``context``
@@ -538,6 +571,10 @@ def disasm(data, vma = 0):
 
           >>> print disasm('b85d000000'.decode('hex'), arch = 'i386')
              0:   b8 5d 00 00 00          mov    eax,0x5d
+          >>> print disasm('b85d000000'.decode('hex'), arch = 'i386', byte = 0)
+             0:   mov    eax,0x5d
+          >>> print disasm('b85d000000'.decode('hex'), arch = 'i386', byte = 0, offset = 0)
+          mov    eax,0x5d
           >>> print disasm('b817000000'.decode('hex'), arch = 'amd64')
              0:   b8 17 00 00 00          mov    eax,0x17
           >>> print disasm('48c7c017000000'.decode('hex'), arch = 'amd64')
@@ -547,6 +584,7 @@ def disasm(data, vma = 0):
              4:   00900052        addseq  r0, r0, r2, asr r0
           >>> print disasm('4ff00500'.decode('hex'), arch = 'thumb', bits=32)
              0:   f04f 0005       mov.w   r0, #5
+          >>>
     """
     result = ''
 
@@ -591,4 +629,24 @@ def disasm(data, vma = 0):
         log.exception("An error occurred while disassembling:\n%s" % data)
     else:
         shutil.rmtree(tmpdir)
-        return result
+
+
+    lines = []
+    pattern = '^( *[0-9a-f]+: *)((?:[0-9a-f]+ )+ *)(.*)'
+    for line in result.splitlines():
+        try:
+            o, b, i = re.search(pattern, line).groups()
+        except:
+            lines.append(line)
+            continue
+
+        line = ''
+
+        if offset:
+            line += o
+        if byte:
+            line += b
+        line += i
+        lines.append(line)
+
+    return '\n'.join(lines)
