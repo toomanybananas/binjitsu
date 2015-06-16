@@ -18,6 +18,7 @@ from ..log import getLogger
 from ..term import text
 from ..util import misc
 from ..qemu import get_qemu_arch
+from ..tubes.process import process
 from .datatypes import *
 
 log = getLogger(__name__)
@@ -147,6 +148,9 @@ class ELF(ELFFile):
                 c055:       cd 80                   int    0x80
         """
         return ELF(make_elf(bytes, extract=False, *a, **kw))
+
+    def process(self, argv=[], *a, **kw):
+        return process([self.path] + argv, *a, **kw)
 
     def _describe(self):
         log.info_once('\n'.join((repr(self.path),
@@ -295,6 +299,10 @@ class ELF(ELFFile):
         >>> any(map(lambda x: 'libc' in x, bash.libs.keys()))
         True
         """
+        if not self.get_section_by_name('.dynamic'):
+            self.libs= {}
+            return
+
         try:
             cmd = 'ulimit -s unlimited; LD_TRACE_LOADED_OBJECTS=1 LD_WARN=1 LD_BIND_NOW=1 %s 2>/dev/null'
             arg = misc.sh_string(self.path)

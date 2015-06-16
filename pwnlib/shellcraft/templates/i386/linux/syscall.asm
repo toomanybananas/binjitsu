@@ -1,5 +1,6 @@
 <%
   from pwnlib.shellcraft import i386
+  from pwnlib.constants import Constant
   from pwnlib.context import context as ctx # Ugly hack, mako will not let it be called context
 %>
 <%page args="syscall = None, arg0 = None, arg1 = None, arg2 = None, arg3 = None, arg4 = None, arg5 = None"/>
@@ -56,7 +57,7 @@ Example:
         ...               -1, 0).rstrip()
             /* call mmap2(0, 4096, 'PROT_READ | PROT_WRITE | PROT_EXEC', 'MAP_PRIVATE | MAP_ANONYMOUS', -1, 0) */
             xor ebx, ebx
-            xor ecx, ecx
+            xor ecx, ecx /* mov ecx, 0x1000 */
             mov ch, 0x10
             push 0x7
             pop edx
@@ -71,8 +72,8 @@ Example:
 </%docstring>
 <%
   append_cdq = False
-  if isinstance(syscall, (str, unicode)) and syscall.startswith('SYS_'):
-      syscall_repr = syscall[4:] + "(%s)"
+  if isinstance(syscall, (str, unicode, Constant)) and str(syscall).startswith('SYS_'):
+      syscall_repr = str(syscall)[4:] + "(%s)"
       args = []
   else:
       syscall_repr = 'syscall(%s)'
