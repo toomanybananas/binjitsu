@@ -4,10 +4,13 @@ import re
 import os
 import copy
 import types
+import string
 import hashlib
 import tempfile
 import operator
 
+from ..context import context
+from ..asm     import *
 from ..log     import getLogger
 from ..elf     import ELF
 from .gadgets  import Gadget, Mem
@@ -147,7 +150,7 @@ class GadgetClassifier(GadgetMapper):
         address = gadget.address
         insns   = gadget.insns
         bytes   = gadget.bytes
-        
+
         instruction_state = address & 1
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes, state=instruction_state)
         if not gadget_mapper:
@@ -223,8 +226,7 @@ class GadgetClassifier(GadgetMapper):
             return None
         else:
             return Gadget(address, insns, regs, move, bytes)
-
-
+    
 
 class GadgetSolver(GadgetMapper):
     r"""Solver a gadget path to satisfy some conditions.
@@ -314,21 +316,26 @@ class GadgetFinder(object):
 
     """
 
-    def __init__(self, elfs, gadget_filter="all", depth=10):
+    def __init__(self, input, arch="i386", gadget_filter="all", depth=10):
         
         import capstone 
         self.capstone = capstone
 
-        if isinstance(elfs, ELF):
-            filename = elfs.file.name
-            elfs = [elfs]
-        elif isinstance(elfs, (str, unicode)):
-            filename = elfs
-            elfs = [ELF(elfs)]
-        elif isinstance(elfs, (tuple, list)):
-            filename = elfs[0].file.name
-        else:
-            log.error("ROP: Cannot load such elfs.")
+        if input:
+            if isinstance(input, ELF):
+                elfs = [input]
+            elif isinstance(input, (str, unicode)):
+                if os.path.exists(input):
+                    elfs = [ELF(input)]
+                elif any(x not in string.printable for x in input[:8]):
+                    context.arch=arch
+                    elfs = [ELF(make_elf(input, extract=False))]
+                else:
+                    log.error("ROP: input filename not found!")
+            elif isinstance(input, (tuple, list)) and isinstance(input[0], ELF):
+                elfs = input
+            else:
+                log.error("ROP: Cannot load such elfs.")
 
         self.elfs = elfs
 
@@ -388,18 +395,20 @@ class GadgetFinder(object):
                 "arm"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM,    arm_gadget[gadget_filter]),
                 "thumb"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_THUMB,  arm_thumb[gadget_filter]),
                 }
-        if self.elfs[0].arch not in self.arch_mode_gadget.keys():
+
+        bin_arch = self.elfs[0].arch
+        data_len = len(self.elfs[0].file.read())
+
+        if bin_arch not in self.arch_mode_gadget.keys():
             raise Exception("Architecture not supported.")
         
-        bin_arch = self.elfs[0].arch
 
         self.arch, self.mode, self.gadget_re = self.arch_mode_gadget[bin_arch]
         self.need_filter = False
-        if len(self.elfs[0].file.read()) >= MAX_SIZE*1000:
+        if data_len >= MAX_SIZE*1000:
             self.need_filter = True
 
         self.solver     = GadgetSolver(self.arch, self.mode)
-
 
 
     def load_gadgets(self):
@@ -437,7 +446,6 @@ class GadgetFinder(object):
                 out.update(gads)
 
         return out
-
 
     def __find_all_gadgets(self, section, gadget_re, elf, arch, mode):
         '''Find gadgets like ROPgadget do.
@@ -495,6 +503,7 @@ class GadgetFinder(object):
                             if onegad:
                                 onegad = self.classifier.classify(onegad)
 
+                            print insns, address
                             if onegad: 
                                 allgadgets += [onegad]
 
