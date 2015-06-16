@@ -238,7 +238,7 @@ class ROP(object):
         Because of `amoco` has a large initialization-time penalty.
         """
         if not self.initialized:
-            
+            print len(self.gadgets) 
             self.gadget_graph = self.build_graph(self.gadgets)
 
             self._global_delete_gadget = {}
@@ -950,7 +950,7 @@ class ROP(object):
             gadget_graph[gad_1] = set()
             outputs = []
             for i in gad_1.regs.keys():
-                if isinstance(i, str):
+                if isinstance(i, (str, unicode)) and ("ip" not in i and "pc" not in i):
                     outputs.append(i)
 
             for gad_2 in gadgets.values():
@@ -958,17 +958,20 @@ class ROP(object):
                     continue
                 inputs=[]
                 for i in gad_2.regs.values():
-                    if isinstance(i, str):
+                    if isinstance(i, (str, unicode)):
                         inputs.append(i)
-                    if isinstance(i, list):
+                    elif isinstance(i, list):
                         for j in i:
-                            if isinstance(j, str):
+                            if isinstance(j, (str, unicode)):
                                 inputs.append(j)
-
                 inter = set(inputs) & set(outputs)
                 if len(inter) > 0:
                     gadget_graph[gad_1].add(gad_2)
-
+        
+        #for k, v in gadget_graph.items():
+            #print "; ".join(k.insns)
+            #for x in v:
+                #print "\t" + "; ".join(x.insns)
         return gadget_graph
 
 

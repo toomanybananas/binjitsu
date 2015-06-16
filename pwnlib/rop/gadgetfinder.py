@@ -133,12 +133,12 @@ class GadgetClassifier(GadgetMapper):
     def __init__(self, arch, mode):
         super(GadgetClassifier, self).__init__(arch, mode)
 
-        self.CALL = {CS_ARCH_X86: "call", CS_ARCH_ARM: "blx"}[self.arch]
-        self.FLAG = {CS_ARCH_X86: "apsr", CS_ARCH_ARM: "apsr"}[self.arch]
-        self.RET  = {CS_ARCH_X86: "ret",  CS_ARCH_ARM: "pop"}[self.arch]
-        self.JMP  = {CS_ARCH_X86: "jmp",  CS_ARCH_ARM: "bx"}[self.arch]
-        self.SP   = {CS_ARCH_X86: "sp",   CS_ARCH_ARM: "sp"}[self.arch]
-        self.IP   = {CS_ARCH_X86: "ip",   CS_ARCH_ARM: "pc"}[self.arch]
+        self.CALL = {CS_ARCH_X86: "call",   CS_ARCH_ARM: "blx"}[self.arch]
+        self.FLAG = {CS_ARCH_X86: "flags",  CS_ARCH_ARM: "apsr"}[self.arch]
+        self.RET  = {CS_ARCH_X86: "ret",    CS_ARCH_ARM: "pop"}[self.arch]
+        self.JMP  = {CS_ARCH_X86: "jmp",    CS_ARCH_ARM: "bx"}[self.arch]
+        self.SP   = {CS_ARCH_X86: "sp",     CS_ARCH_ARM: "sp"}[self.arch]
+        self.IP   = {CS_ARCH_X86: "ip",     CS_ARCH_ARM: "pc"}[self.arch]
     
     def classify(self, gadget):
         """Classify gadgets, get the regs relationship, and sp move. 
@@ -174,6 +174,12 @@ class GadgetClassifier(GadgetMapper):
         move = 0
         ip_move = 0
 
+        first_instr      = insns[0].split()
+        first_mnemonic   = first_instr[0]
+
+        if first_mnemonic == self.CALL:
+            regs["pc_temp"] = first_instr[1]
+
         last_instr      = insns[-1].split()
         last_mnemonic   = last_instr[0]
 
@@ -191,6 +197,7 @@ class GadgetClassifier(GadgetMapper):
 
             if self.SP in str(reg_out):
                 move = extract_offset(inputs)[1]
+                continue
 
             if self.IP in str(reg_out):
                 if last_mnemonic == self.RET:
@@ -462,6 +469,12 @@ class GadgetFinder(object):
 
                 gg = self.__deduplicate(gg)
 
+
+                if self.arch == self.capstone.CS_ARCH_X86:
+                    gg = self.__simplify_x86(gg)
+                elif self.arch == self.capstone.CS_ARCH_ARM:
+                    gg = self.__simplify_arm(gg)
+
                 for gadget in gg:
                     out[gadget.address] = gadget
                 
@@ -563,7 +576,7 @@ class GadgetFinder(object):
         '''
         new = None
         poppc = re.compile(r'^pop \{.*pc\}')
-        blx   = re.compile(r'^blx .{2}')
+        blx   = re.compile(r'^blx r[0-9]')
         #bx    = re.compile(r'^bx ..$')
         #poplr = re.compile(r'^pop {.*lr}')
         #mov   = re.compile(r'^mov (.{2}), (.{2})')
@@ -577,6 +590,58 @@ class GadgetFinder(object):
             new = gadget
 
         return new
+
+    def __simplify_arm(self, gadgets):
+        """Simplify gadgets, reserve minimizing gadgets set.
+
+        Example:
+        
+            >>> gadgets = {
+                        "blx r3; pop {r4, pc}", "blx r2; pop {r4, r5, pc}",
+                        "blx r5; pop {pc}", "blx r4; pop {r4, pc}",
+                        "pop {r0, pc}", "pop {r0, r5, pc}",
+                        "pop {r0, r1, pc}", "pop {r0, r1, r3, pc}",
+                        "pop {r0, r1, r2, pc}", "pop {r0, r1, r2, r5, pc}",
+                        "pop {r0, r1, r2, r3, pc}", "pop {r0, r1, r2, r3, r6, pc}",
+                        }
+            >>> __simplify_arm(gadgets)
+            {   "blx r3; pop {r4, pc}", 
+                "blx r5; pop {pc}",
+                "pop {r0, pc}",
+                "pop {r0, r1, pc}",
+                "pop {r0, r1, r2, pc}",
+                "pop {r0, r1, r2, r3, pc}"}
+
+        """
+        blx_pop         = re.compile(r'^blx r[0-3]; pop \{.*pc\}$')
+        blx_pop_fine    = re.compile(r'^blx r[4-9]; pop \{.*pc\}$')
+        pop_r0          = re.compile(r'^pop \{r0, .*pc\}$')
+        pop_r0_r1       = re.compile(r'^pop \{r0, r1, .*pc\}$')
+        pop_r0_r1_r2    = re.compile(r'^pop \{r0, r1, r2, .*pc\}$')
+        pop_r0_r1_r2_r3 = re.compile(r'^pop \{r0, r1, r2, r3, .*pc\}$')
+
+        gadgets_list = ["; ".join(gadget.insns) for gadget in gadgets]
+        gadgets_dict = {"; ".join(gadget.insns) : gadget for gadget in gadgets}
+        
+        def re_match(re_exp):
+            result = [gadget for gadget in gadgets_list if re_exp.match(gadget)]
+            return sorted(result, key=lambda t:len(t))
+
+        re_list = [blx_pop, blx_pop_fine, pop_r0, pop_r0_r1, pop_r0_r1_r2, pop_r0_r1_r2_r3]
+
+        match_list = [re_match(x) for x in re_list]
+        
+        for i in match_list:
+            print i
+
+        out = []
+        for i in match_list: 
+            if i:
+                item_01 = i[0]
+                out.append(gadgets_dict[item_01])
+
+        return out
+        
 
     def __checkMultiBr(self, decodes, branch_groups):
         """Caculate branch number for __passClean().
@@ -628,7 +693,7 @@ class GadgetFinder(object):
             return True
 
 
-        if len(decodes) > 4:
+        if len(decodes) > 5:
             return False
 
         if (not pop_pc.match(last_instr)) and (not (set(decodes[-1].groups) & set(branch_groups))):
