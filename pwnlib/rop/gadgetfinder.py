@@ -25,6 +25,7 @@ from amoco.cas.expressions import *
 from z3          import *
 from collections import OrderedDict
 from operator    import itemgetter
+from capstone    import CS_ARCH_X86, CS_ARCH_ARM, CS_MODE_32, CS_MODE_64, CS_MODE_ARM, CS_MODE_THUMB
 
 
 log = getLogger(__name__)
@@ -42,7 +43,6 @@ class GadgetMapper(object):
     def __init__(self, arch, mode):
         '''Base class which can symbolic execution gadget instructions.
         '''
-        from capstone import CS_ARCH_X86, CS_ARCH_ARM, CS_MODE_32, CS_MODE_64, CS_MODE_ARM, CS_MODE_THUMB
         self.arch = arch
         
         if arch == CS_ARCH_X86 and mode == CS_MODE_32:
@@ -103,7 +103,7 @@ class GadgetMapper(object):
 
         if len(blocks) == 0:
             return None
-        #assert(len(blocks) > 0)
+
         mp = amoco.cas.mapper.mapper()
         for block in blocks:
             # If the last instruction is a call, we need to "neutralize" its effect
@@ -132,6 +132,13 @@ class GadgetClassifier(GadgetMapper):
 
     def __init__(self, arch, mode):
         super(GadgetClassifier, self).__init__(arch, mode)
+
+        self.CALL = {CS_ARCH_X86: "call", CS_ARCH_ARM: "blx"}[self.arch]
+        self.FLAG = {CS_ARCH_X86: "apsr", CS_ARCH_ARM: "apsr"}[self.arch]
+        self.RET  = {CS_ARCH_X86: "ret",  CS_ARCH_ARM: "pop"}[self.arch]
+        self.JMP  = {CS_ARCH_X86: "jmp",  CS_ARCH_ARM: "bx"}[self.arch]
+        self.SP   = {CS_ARCH_X86: "sp",   CS_ARCH_ARM: "sp"}[self.arch]
+        self.IP   = {CS_ARCH_X86: "ip",   CS_ARCH_ARM: "pc"}[self.arch]
     
     def classify(self, gadget):
         """Classify gadgets, get the regs relationship, and sp move. 
@@ -150,83 +157,101 @@ class GadgetClassifier(GadgetMapper):
         address = gadget.address
         insns   = gadget.insns
         bytes   = gadget.bytes
+       
+        # For no mapper gadgets
+        no_mapper_instr = ["int", "sysenter", "syscall", "svc"]
+        last_instr      = insns[-1].split()
+        last_mnemonic   = last_instr[0]
+        if last_mnemonic in no_mapper_instr and len(insns) == 1:
+            return Gadget(address, insns, {}, 0, bytes)
 
         instruction_state = address & 1
-        gadget_mapper = self.sym_exec_gadget_and_get_mapper(bytes, state=instruction_state)
-        if not gadget_mapper:
+        mapper = self.sym_exec_gadget_and_get_mapper(bytes, state=instruction_state)
+        if not mapper:
             return None
-
+        
         regs = {}
         move = 0
         ip_move = 0
-        for reg_out, _ in gadget_mapper:
-            if reg_out._is_ptr or reg_out._is_mem:
+
+        last_instr      = insns[-1].split()
+        last_mnemonic   = last_instr[0]
+
+        for reg_out, _ in mapper:
+            if last_mnemonic != self.CALL and \
+               (reg_out._is_ptr or reg_out._is_mem):
                 return None
 
-            if "flags" in str(reg_out) or "apsr" in str(reg_out):
+            if self.FLAG in str(reg_out):
                 continue
 
-            inputs = gadget_mapper[reg_out]
+            inputs = mapper[reg_out]
 
-            if "sp" in str(reg_out):
+            if self.SP in str(reg_out):
                 move = extract_offset(inputs)[1]
-                continue
 
-            if "ip" in str(reg_out):
-                if inputs._is_mem:
-                    ip_move = inputs.a.disp 
-                    continue
-
-            if "pc" in str(reg_out):
-                if isinstance(inputs, mem):
-                    ip_move = inputs.a.disp
-                    reg_mem = locations_of(inputs)
-                    reg_str = "_".join([str(i) for i in reg_mem])
-                    if "sp" not in reg_str:
+            if self.IP in str(reg_out):
+                if last_mnemonic == self.RET:
+                    if isinstance(inputs, mem):
+                        ip_move = inputs.a.disp
+                    elif isinstance(inputs, op):
+                        ip_move = extract_offset(inputs)[1]
+                    else:
                         return None
-                elif isinstance(inputs, op):
-                    ip_move = extract_offset(inputs)[1]
-
-                if ip_move != 0:
+                elif last_mnemonic == self.CALL:
+                    operator = last_instr[1]
+                    regs[str(reg_out)] = operator
                     continue
-
-
-            if inputs._is_mem:
-                offset = inputs.a.disp 
-                reg_mem = locations_of(inputs)
-
-                if isinstance(reg_mem, list):
-                    reg_str = "_".join([str(i) for i in reg_mem])
+                elif last_mnemonic == self.JMP:
+                    pass
                 else:
-                    reg_str = str(reg_mem)
+                    return None
 
-                reg_size = inputs.size
-                regs[str(reg_out)] = Mem(reg_str, offset, reg_size)
+            handled_inputs = self.handle_mapper(inputs)
+            regs[str(reg_out)] = handled_inputs
 
-            elif inputs._is_reg:
-                regs[str(reg_out)] = str(inputs)
-
-            elif inputs._is_cst:
-                regs[str(reg_out)] = inputs.value
-
-            elif isinstance(inputs, list) or isinstance(inputs, types.GeneratorType):
-                regs[str(reg_out)] = [str(locations_of(i) for i in inputs)]
-
-            else:
-                allregs = locations_of(inputs)
-                if isinstance(allregs, list):
-                    allregs = [str(i) for i in allregs]
-                elif isinstance(allregs, reg):
-                    allregs = str(allregs)
-                regs[str(reg_out)] = allregs
-        
-        if "pop" in insns[-1] and ip_move != (move - self.align):
+        if self.RET == last_mnemonic and ip_move != (move - self.align):
             return None
         elif not regs and not move:
             return None
         else:
             return Gadget(address, insns, regs, move, bytes)
+
     
+    def handle_mapper(self, inputs):
+
+        if inputs._is_mem:
+            offset = inputs.a.disp
+            reg_mem = locations_of(inputs)
+
+            if isinstance(reg_mem, list):
+                reg_str = "_".join([str(i) for i in reg_mem])
+            else:
+                reg_str = str(reg_mem)
+
+            reg_size = inputs.size
+            
+            return Mem(reg_str, offset, reg_size)
+
+        elif inputs._is_reg:
+            return str(inputs)
+
+        elif inputs._is_cst:
+            return inputs.value
+
+        elif isinstance(inputs, list) or isinstance(inputs, types.GeneratorType):
+            return  [str(locations_of(i) for i in inputs)]
+
+        else:
+            allregs = locations_of(inputs)
+            if isinstance(allregs, list):
+                allregs = [str(i) for i in allregs]
+            elif isinstance(allregs, reg):
+                allregs = str(allregs)
+
+            return allregs
+
+        
 
 class GadgetSolver(GadgetMapper):
     r"""Solver a gadget path to satisfy some conditions.
@@ -503,7 +528,6 @@ class GadgetFinder(object):
                             if onegad:
                                 onegad = self.classifier.classify(onegad)
 
-                            print insns, address
                             if onegad: 
                                 allgadgets += [onegad]
 
