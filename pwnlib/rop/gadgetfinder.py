@@ -158,7 +158,7 @@ class GadgetClassifier(GadgetMapper):
         insns   = gadget.insns
         bytes   = gadget.bytes
        
-        # For no mapper gadgets
+        # No mapper gadgets will return immediately.
         no_mapper_instr = ["int", "sysenter", "syscall", "svc"]
         last_instr      = insns[-1].split()
         last_mnemonic   = last_instr[0]
@@ -184,8 +184,10 @@ class GadgetClassifier(GadgetMapper):
 
             if self.FLAG in str(reg_out):
                 continue
-
-            inputs = mapper[reg_out]
+            try:
+                inputs = mapper[reg_out]
+            except ValueError:
+                return None
 
             if self.SP in str(reg_out):
                 move = extract_offset(inputs)[1]
@@ -603,8 +605,28 @@ class GadgetFinder(object):
 
         # "pop {.*pc}" for arm
         # Because Capstone cannot identify this instruction as Branch instruction
-        pop_pc = re.compile('^pop \{.*pc\}') 
-        last_instr = (decodes[-1].mnemonic + " " + decodes[-1].op_str)
+        blx     = re.compile('^blx ..$')
+        pop_pc  = re.compile('^pop \{.*pc\}') 
+        call    = re.compile(r'^call ...$')
+        int80   = re.compile(r'int +0x80')
+        ret     = re.compile(r'^ret$')
+
+        first_instr = (decodes[0].mnemonic + " " + decodes[0].op_str)
+        last_instr  = (decodes[-1].mnemonic + " " + decodes[-1].op_str)
+
+        # For gadgets as follows:
+        # 1. call reg; xxx; ret
+        # 2. blx reg; xxx; pop {.*pc}
+        # 3. int 0x80; xxx; ret
+        if call.match(first_instr) and ret.match(last_instr):
+            return True
+        
+        if blx.match(first_instr) and pop_pc.match(last_instr):
+            return True
+
+        if int80.match(first_instr) and ret.match(last_instr):
+            return True
+
 
         if len(decodes) > 4:
             return False
@@ -613,7 +635,7 @@ class GadgetFinder(object):
             return False
         
         branch_num = self.__checkMultiBr(decodes, branch_groups)
-        if not multibr and (branch_num > 2 or branch_num == 0):
+        if not multibr and (branch_num > 1 or branch_num == 0):
             return False
         
         return True
