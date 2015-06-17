@@ -1089,6 +1089,9 @@ class ROP(object):
                 elif isinstance(i, str):
                     if k != i:
                         gadget_dsts.append(k)
+                else:
+                    gadget_dsts.append(k)
+
             for reg in regs:
                 if reg in gadget_dsts:
                     alldst[reg].add(the_insns)
@@ -1097,7 +1100,7 @@ class ROP(object):
         results = reduce(set.intersection, dstlist)
         for r in results:
             end.add(asm_instr_dict[r])
-        
+
         paths = []
         if len(start) != 0 and len(end) != 0:
             for s in list(start):
