@@ -31,7 +31,7 @@ from capstone    import CS_ARCH_X86, CS_ARCH_ARM, CS_MODE_32, CS_MODE_64, CS_MOD
 log = getLogger(__name__)
 
 # File size more than 100kb, should be filter for performance trade off
-MAX_SIZE = 100
+MAX_SIZE = 200
 
 class GadgetMapper(object):
     r"""Get the gadgets mapper in symbolic expressions.
@@ -61,6 +61,14 @@ class GadgetMapper(object):
             raise Exception("Unsupported archtecture %s." % arch)
 
         self.cpu = cpu
+
+        self.CALL = {CS_ARCH_X86: "call",   CS_ARCH_ARM: "blx"}[self.arch]
+        self.FLAG = {CS_ARCH_X86: "flags",  CS_ARCH_ARM: "apsr"}[self.arch]
+        self.RET  = {CS_ARCH_X86: "ret",    CS_ARCH_ARM: "pop"}[self.arch]
+        self.JMP  = {CS_ARCH_X86: "jmp",    CS_ARCH_ARM: "bx"}[self.arch]
+        self.SP   = {CS_ARCH_X86: "sp",     CS_ARCH_ARM: "sp"}[self.arch]
+        self.IP   = {CS_ARCH_X86: "ip",     CS_ARCH_ARM: "pc"}[self.arch]
+
 
     def sym_exec_gadget_and_get_mapper(self, code, state=0):
         '''This function gives you a ``mapper`` object from assembled `code`. 
@@ -133,12 +141,6 @@ class GadgetClassifier(GadgetMapper):
     def __init__(self, arch, mode):
         super(GadgetClassifier, self).__init__(arch, mode)
 
-        self.CALL = {CS_ARCH_X86: "call",   CS_ARCH_ARM: "blx"}[self.arch]
-        self.FLAG = {CS_ARCH_X86: "flags",  CS_ARCH_ARM: "apsr"}[self.arch]
-        self.RET  = {CS_ARCH_X86: "ret",    CS_ARCH_ARM: "pop"}[self.arch]
-        self.JMP  = {CS_ARCH_X86: "jmp",    CS_ARCH_ARM: "bx"}[self.arch]
-        self.SP   = {CS_ARCH_X86: "sp",     CS_ARCH_ARM: "sp"}[self.arch]
-        self.IP   = {CS_ARCH_X86: "ip",     CS_ARCH_ARM: "pc"}[self.arch]
     
     def classify(self, gadget):
         """Classify gadgets, get the regs relationship, and sp move. 
@@ -197,7 +199,11 @@ class GadgetClassifier(GadgetMapper):
 
             if self.SP in str(reg_out):
                 move = extract_offset(inputs)[1]
-                #continue
+
+                # Because call will push the eip/rip onto stack,
+                # the Stack will increase.
+                if last_mnemonic == self.CALL and self.arch == CS_ARCH_X86:
+                    move -= self.align
 
             if self.IP in str(reg_out):
                 if last_mnemonic == self.RET:
@@ -208,11 +214,13 @@ class GadgetClassifier(GadgetMapper):
                     else:
                         return None
                 elif last_mnemonic == self.CALL:
-                    operator = last_instr[1]
-                    regs[str(reg_out)] = operator
+                    opt_str = last_instr[1]
+                    regs[str(reg_out)] = opt_str
+                    regs["pc_temp"] = opt_str
                     continue
                 elif last_mnemonic == self.JMP:
-                    pass
+                    opt_str = last_instr[1]
+                    regs["pc_temp"] = opt_str
                 else:
                     return None
 
@@ -307,11 +315,18 @@ class GadgetSolver(GadgetMapper):
         instruction_state = path[0].address & 1
         gadget_mapper = self.sym_exec_gadget_and_get_mapper(concate_bytes, state=instruction_state)
 
+        last_instr      = path[-1].insns[-1].split()
+        last_mnemonic   = last_instr[0]
+
         stack_changed = []
         move = 0
         for reg_out, constraint in gadget_mapper:
             if "sp" in str(reg_out):
                 move = extract_offset(gadget_mapper[reg_out])[1]
+                # Because call will push the eip/rip onto stack,
+                # the Stack will increase.
+                if last_mnemonic == self.CALL and self.arch == CS_ARCH_X86:
+                    move -= self.align
 
             if str(reg_out) in conditions.keys():
                 model = self._prove(conditions[str(reg_out)] == constraint.to_smtlib())
@@ -428,12 +443,11 @@ class GadgetFinder(object):
 
 
         self.arch_mode_gadget = {
-                "i386"  : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_32,     x86_gadget[gadget_filter]),
-                "amd64" : (self.capstone.CS_ARCH_X86, self.capstone.CS_MODE_64,     x86_gadget[gadget_filter]),
-                "arm"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_ARM,    arm_gadget[gadget_filter]),
-                "thumb"   : (self.capstone.CS_ARCH_ARM, self.capstone.CS_MODE_THUMB,  arm_thumb[gadget_filter]),
+                "i386"  : (CS_ARCH_X86, CS_MODE_32,     x86_gadget[gadget_filter]),
+                "amd64" : (CS_ARCH_X86, CS_MODE_64,     x86_gadget[gadget_filter]),
+                "arm"   : (CS_ARCH_ARM, CS_MODE_ARM,    arm_gadget[gadget_filter]),
+                "thumb" : (CS_ARCH_ARM, CS_MODE_THUMB,  arm_thumb[gadget_filter]),
                 }
-
         bin_arch = self.elfs[0].arch
         data_len = len(self.elfs[0].file.read())
 
@@ -472,7 +486,6 @@ class GadgetFinder(object):
                         gg += self.__find_all_gadgets(seg, gadget_re, elf, arch, mode)
 
                 gg = self.__deduplicate(gg)
-
 
                 if self.need_filter:
                     if self.arch == self.capstone.CS_ARCH_X86:
@@ -577,6 +590,8 @@ class GadgetFinder(object):
         return new
 
     def __simplify_x86(self, gadgets):
+        """Simplify gadgets, reserve minimizing gadgets set.
+        """
         pop_ax  = re.compile(r'^pop .ax; (pop (.{3}); )*ret$')
         pop_bx  = re.compile(r'^pop .bx; (pop (.{3}); )*ret$')
         pop_cx  = re.compile(r'^pop .cx; (pop (.{3}); )*ret$')

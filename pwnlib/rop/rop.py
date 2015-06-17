@@ -445,7 +445,8 @@ class ROP(object):
             for d, dlist in self._global_delete_gadget.items():
                 for i in dlist:
                     self.gadget_graph[d].remove(i)
-            
+
+            self.ret_to_stack_gadget = None
 
             self.initialized = True
     
@@ -562,7 +563,6 @@ class ROP(object):
         gadget_list = collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-len(t[1]), 
                       len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
 
-        
         reg_without_ip = values.keys()
         remain_regs = set(reg_without_ip)
 
@@ -576,13 +576,24 @@ class ROP(object):
 
             if all(i in remain_regs for i in regs):
                 path = ropgadgets[path_hash]
-                conditions = {}
+                result = self.handle_non_ret_branch(path, regs)
+                if not result:
+                    continue
+
+                path, return_to_stack_gadget, conditions = result
                 for reg in regs:
-                    conditions[reg] = values[reg]
+
+                    reg64 = reg
+                    # x64: rax, eax reg[-2:] == ax
+                    if self.arch == "amd64":
+                        reg64 = "r" + reg[-2:]
+                    conditions[reg64] = values[reg]
 
                 result = self.Verify.verify_path(path, conditions)
                 if result:
                     sp, stack = result
+                    if return_to_stack_gadget:
+                        sp += return_to_stack_gadget.move
                     out.append(("_".join(regs), (path, sp, stack)))
                 else:
                     continue
@@ -591,12 +602,69 @@ class ROP(object):
 
         if len(remain_regs) > 0:
             log.error("Gadget to regs %r not found!" % list(remain_regs))
-
+        
+        # Top sort to decide the reg order.
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
         ordered_out = self.flat_as_on_stack(ordered_out)
 
         return ordered_out
+    
+    def handle_non_ret_branch(self, path, regs):
+        CALL = {  "i386"    : "call",
+                  "amd64"   : "call",
+                  "arm"     : "blx"}[self.arch]
+        JUMP = {  "i386"    : "jmp",
+                  "amd64"   : "jmp",
+                  "arm"     : "bx"}[self.arch]
+        PC   = {  "i386"    : "eip",
+                  "amd64"   : "rip",
+                  "arm"     : "pc"}[self.arch]
+        # Inital the result
+        condition = {}
+        return_to_stack_gadget = None
+        
+        # If call/jmp/blx in the path[:-1], not the last one.
+        # Discard this path.
+        path_len = len(path)
+        for i in range(path_len - 1):
+            gadget = path[i]
+            last_instr = gadget.insns[-1].split()
+            last_mnemonic   = last_instr[0]
+            if any([last_mnemonic == x for x in [CALL, JUMP]]):
+                return None
+
+        gadget = path[-1]
+        last_instr = gadget.insns[-1].split()
+        last_mnemonic   = last_instr[0]
+        if last_mnemonic == CALL or last_mnemonic == JUMP:
+            pc_reg = gadget.regs[PC]
+            return_to_stack_gadget = self.get_return_to_stack_gadget()
+            if isinstance(pc_reg, Mem):
+                condition = {PC: return_to_stack_gadget.address}
+            elif isinstance(pc_reg, (str, unicode)):
+                set_value_gadget = self.search_path("sp", [pc_reg])[0]
+                # TODO: The order need to be decided.
+                path = path[:-1] + set_value_gadget + [gadget] 
+                condition = {pc_reg: return_to_stack_gadget.address}
+            else:
+                return None
+
+        return (path, return_to_stack_gadget, condition)
+    
+    def get_return_to_stack_gadget(self):
+        RET_GAD = { "i386"  : re.compile(r'(pop (.{3}); )+ret$'),
+                    "amd64" : re.compile(r'(pop (.{3}); )+ret$'),
+                    "arm"   : re.compile(r'^pop \{.+pc\}')}[self.arch]
+
+        if self.ret_to_stack_gadget:
+            return self.ret_to_stack_gadget
+
+        for k, v in self.gadgets.items():
+            instr = "; ".join(v.insns)
+            if RET_GAD.match(instr):
+                self.ret_to_stack_gadget = v
+                return v
 
     def flat_as_on_stack(self, ordered_dict):
         """Convert the values in ordered_dict to the sequence of stack values.
@@ -611,22 +679,32 @@ class ROP(object):
                 A sequence of stack values.
         """
 
+        PC   = {  "i386"    : "eip",
+                  "amd64"   : "rip",
+                  "arm"     : "pc"}[self.arch]
+
         out = []
 
         for reg, result in ordered_dict.items():
             outrop = []
-            ropgadget, move, _ = result
+            path, move, _ = result
             sp = 0
             know = {}
             compensate = 0
-            for gadget in ropgadget:
-                if sp != 0:
-                    know[sp] = gadget
-                    if gadget.insns[-1].split(" ")[0].strip() == "call":
-                        know[sp + 1] = Padding()
-                        move += self.align
+            path_len = len(path)
+            for i in range(path_len):
+                
+                gadget = path[i]
+                if i == path_len - 1:
+                    #sp += gadget.move - self.align
+                    break
 
-                sp += gadget.move - self.align
+                IP_reg = gadget.regs[PC]
+                if isinstance(IP_reg, Mem):
+                    know[IP_reg.offset] = path[i+1]
+
+                sp += gadget.move
+
 
             ropgadget, _, stack_result = result
             outrop.append(ropgadget[0])
@@ -1335,7 +1413,9 @@ class ROP(object):
                     gadget_dsts.append(k)
 
             for reg in regs:
-                if reg in gadget_dsts:
+                # x64: rax, eax reg[-2:] == ax
+                # r0, r1... length 2, not a problem.
+                if any([reg[-2:] in x for x in gadget_dsts]):
                     alldst[reg].add(the_insns)
 
         dstlist = alldst.values()
@@ -1354,6 +1434,12 @@ class ROP(object):
         cond = {}
         for reg in regs:
             cond[reg] = random.randint(2**16, 2**32)
+
+            # x64: rax, eax reg[-2:] == ax
+            if self.arch == "amd64":
+                reg64 = "r" + reg[-2:]
+                if reg != reg64:
+                    cond[reg64] = random.randint(2**16, 2**32)
         
         # Solve this gadgets arrangement, if stack's value not changed, ignore it.
         path_filted = []
