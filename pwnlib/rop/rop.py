@@ -482,22 +482,22 @@ class ROP(object):
             For simple cases, the order doesn't matter.
             (Note: The display for OrderedDict is ugly, sorry!)
 
-            >>> set_registers({'eax': 1})
+            >>> setRegisters({'eax': 1})
             OrderedDict([('eax', [1000, 1])])
             OrderedDict([('eax', [1000], 8, [(0, 1)])])
-            >>> set_registers({'eax': 1, 'ecx': 0})
+            >>> setRegisters({'eax': 1, 'ecx': 0})
             OrderedDict([('eax', [1000, 1]), ('ecx', [3000, 0])])
-            >>> set_registers({'ebx': None})
+            >>> setRegisters({'ebx': None})
             OrderedDict([('ebx', [1000, None, 2000])])
 
             For complex cases, there is only one possible ordering:
 
-            >>> set_registers({'eax': 1, 'ebx': None})
+            >>> setRegisters({'eax': 1, 'ebx': None})
             OrderedDict([('ebx', [1000, None, 2000]), ('eax', [1000, 1])])
 
             Sometimes, it may not be possible/
 
-            >>> set_registers({'esi': 0})
+            >>> setRegisters({'esi': 0})
             <exception>
         """
         
@@ -1152,13 +1152,17 @@ class ROP(object):
             Gadget02 ==> 2000: mov ebx, eax; ret
             Gadget03 ==> 3000: pop ecx; ret
             Gadget04 ==> 4000: mov edx, ebx; ret
+            >>> gadgets = {
+                    1000: "pop eax; ret",
+                    2000: "mov ebx, eax; ret",
+                    3000: "pop ecx; ret",
+                    4000: "mov edx, ebx; ret"}
 
             >>> build_graph(gadgets)
-            {Gadget01 : [Gadget02], 
-             Gadget02 : [Gadget04],
-             Gadget03 : [],
-             Gadget04 : []}
-            
+            {1000: [2000], 
+             2000: [4000],
+             3000: [],
+             4000: []}
         '''
         gadget_graph = {}
         for gad_1 in gadgets.values():
