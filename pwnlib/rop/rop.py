@@ -401,7 +401,6 @@ class ROP(object):
         Arguments:
             elfs(list): List of ``pwnlib.elf.ELF`` objects for mining
         """
-        #import ropgadget
 
         # Permit singular ROP(elf) vs ROP([elf])
         if isinstance(elfs, ELF):
@@ -505,70 +504,86 @@ class ROP(object):
         self.__init_classify_and_solver()
 
         out = []
+
+        # Such as: {path_md5_hash: path}
         ropgadgets = {}
+
+        # Such as: {path_md5_hash: set(regs)}
         gadget_list = {}
 
+        # Convert the values into dict format.
         if isinstance(values, list):
             values = dict(values)
-        
-        def md5_insns(path):
+
+        def md5_path(path):
             out = []
             for gadget in path:
                 out.append("; ".join(gadget.insns)) 
 
             return hashlib.md5("|".join(out)).hexdigest()
 
-        def record(ropgadget, reg):
-            for gadgets in ropgadget:
-                all_gadget_address = 0
-                all_gadget_address = md5_insns(gadgets)
+        def record(gadget_paths, reg):
+            for path in gadget_paths:
+                path_hash= md5_path(path)
 
-                ropgadgets[all_gadget_address] = gadgets
+                ropgadgets[path_hash] = path
 
-                if all_gadget_address not in gadget_list.keys():
-                    gadget_list[all_gadget_address] = set()
-                gadget_list[all_gadget_address].add(reg)
+                if path_hash not in gadget_list.keys():
+                    gadget_list[path_hash] = set()
+                gadget_list[path_hash].add(reg)
 
 
         for reg, value in values.items():
 
-            ropgadget = self.search_path("sp", [reg])
+            gadget_paths = self.search_path("sp", [reg])
 
-            if not ropgadget:
+            if not gadget_paths:
                 log.error("Gadget to reg %s not found!" % reg)
 
             # Combine the same gadgets together.
-            record(ropgadget, reg)
+            # pop rdi; pop rsi; ret
+            # set rdi = xxx; set rsi = yyy
+            # This gadget will meet these two conditions
+            # No need using two gadgets respectively.
+            record(gadget_paths, reg)
 
         ip_reg = {"i386" : "eip",
                   "amd64": "rip",
                   "arm"  : "pc"}
+
         this_ip = ip_reg[self.arch]
         
         reg_without_ip = values.keys()
 
-        gadget_filter = {}
         # Combine the same gadgets together.
+        # See the comments above.
+        # Sort the dict using two args:
+        #   arg1: number of registers, reverse order.
+        #   arg2: length of path's instructions
         gadget_list = collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-len(t[1]), 
                       len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
 
-        middle_set = set(reg_without_ip)
-        for all_gadget_address, regs in gadget_list.items():
-            if all(i in middle_set for i in regs):
-                gadget_filter[all_gadget_address] = regs
-                middle_set -= regs 
 
-        for all_gadget_address, regs in gadget_filter.items():
-            ropgadget = ropgadgets[all_gadget_address]
-            conditions = {}
-            for reg in regs:
-                conditions[reg] = values[reg]
+        remain_regs = set(reg_without_ip)
+        for path_hash, regs in gadget_list.items():
 
+            if not remain_regs:
+                break
 
-            result = self.Verify.verify_path(ropgadget, conditions)
-            if result:
-                sp, stack = result
-                out.append(("_".join(regs), (ropgadget, sp, stack)))
+            if all(i in remain_regs for i in regs):
+                path = ropgadgets[path_hash]
+                conditions = {}
+                for reg in regs:
+                    conditions[reg] = values[reg]
+
+                result = self.Verify.verify_path(path, conditions)
+                if result:
+                    sp, stack = result
+                    out.append(("_".join(regs), (path, sp, stack)))
+                else:
+                    continue
+
+                remain_regs -= regs
 
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
