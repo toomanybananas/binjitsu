@@ -571,25 +571,46 @@ class GadgetFinder(object):
 
         return new
 
+    def __simplify_x86(self, gadgets):
+        pop_ax  = re.compile(r'^pop .ax; (pop (.{3}); )*ret$')
+        pop_bx  = re.compile(r'^pop .bx; (pop (.{3}); )*ret$')
+        pop_cx  = re.compile(r'^pop .cx; (pop (.{3}); )*ret$')
+        pop_dx  = re.compile(r'^pop .dx; (pop (.{3}); )*ret$')
+        pop_di  = re.compile(r'^pop .di; (pop (.{3}); )*ret$')
+        pop_si  = re.compile(r'^pop .si; (pop (.{3}); )*ret$')
+        pop_r8  = re.compile(r'^pop .r8; (pop (.{3}); )*ret$')
+        pop_r9  = re.compile(r'^pop .r9; (pop (.{3}); )*ret$')
+        leave   = re.compile(r'^leave; ret$')
+        int80 = re.compile(r'int +0x80; (pop (.{3}); )*ret$')
+        syscall = re.compile(r'^syscall$')
+        sysenter = re.compile(r'^sysenter$')
+
+        re_list = [pop_ax, pop_bx, pop_cx, pop_dx, pop_di, pop_si, 
+                   pop_r8, pop_r9, leave, int80, syscall, sysenter]
+
+        return self.__simplify(gadgets, re_list)
+
+
     def __filter_for_arm_big_binary(self, gadget):
         '''Filter gadgets for big binary.
         '''
         new = None
-        poppc = re.compile(r'^pop \{.*pc\}')
-        blx   = re.compile(r'^blx r[0-9]')
-        #bx    = re.compile(r'^bx ..$')
-        #poplr = re.compile(r'^pop {.*lr}')
+        poppc = re.compile(r'^pop \{.*pc\}$')
+        blx   = re.compile(r'^blx r[0-9]$')
+        bx    = re.compile(r'^bx r[0-9]$')
+        poplr = re.compile(r'^pop \{.*lr\}$')
         #mov   = re.compile(r'^mov (.{2}), (.{2})')
         svc   = re.compile(r'^svc$')
 
         valid = lambda insn: any(map(lambda pattern: pattern.match(insn), 
-            [poppc,blx,svc]))
+            [poppc,blx,svc,bx,poplr,svc]))
 
         insns = gadget.insns
         if all(map(valid, insns)):
             new = gadget
 
         return new
+
 
     def __simplify_arm(self, gadgets):
         """Simplify gadgets, reserve minimizing gadgets set.
@@ -619,6 +640,15 @@ class GadgetFinder(object):
         pop_r0_r1       = re.compile(r'^pop \{r0, r1, .*pc\}$')
         pop_r0_r1_r2    = re.compile(r'^pop \{r0, r1, r2, .*pc\}$')
         pop_r0_r1_r2_r3 = re.compile(r'^pop \{r0, r1, r2, r3, .*pc\}$')
+        bx              = re.compile(r'^bx r[0-4]$')
+        pop_lr          = re.compile(r'^pop \{.*lr\}.*pop \{.*pc\}$')
+        svc             = re.compile(r'^svc$')
+
+        re_list = [blx_pop, blx_pop_fine, pop_r0, pop_r0_r1, pop_r0_r1_r2, pop_r0_r1_r2_r3, bx, pop_lr, svc]
+
+        return self.__simplify(gadgets, re_list)
+    
+    def __simplify(self, gadgets, re_list):
 
         gadgets_list = ["; ".join(gadget.insns) for gadget in gadgets]
         gadgets_dict = {"; ".join(gadget.insns) : gadget for gadget in gadgets}
@@ -627,19 +657,13 @@ class GadgetFinder(object):
             result = [gadget for gadget in gadgets_list if re_exp.match(gadget)]
             return sorted(result, key=lambda t:len(t))
 
-        re_list = [blx_pop, blx_pop_fine, pop_r0, pop_r0_r1, pop_r0_r1_r2, pop_r0_r1_r2_r3]
-
         match_list = [re_match(x) for x in re_list]
-        
-        for i in match_list:
-            print i
 
         out = []
         for i in match_list: 
             if i:
                 item_01 = i[0]
                 out.append(gadgets_dict[item_01])
-
         return out
         
 
