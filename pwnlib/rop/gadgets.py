@@ -113,6 +113,9 @@ class Mem(Persistent):
     def __str__(self):
         return "M%d(%s, #%x)" % (self.size, self.reg, self.offset)
 
+    def __repr__(self):
+        return "M%d(%s, #%x)" % (self.size, self.reg, self.offset)
+
     def __getitem__(self, key):
         return getattr(self, key)
 

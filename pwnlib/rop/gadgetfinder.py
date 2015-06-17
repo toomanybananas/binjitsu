@@ -197,7 +197,7 @@ class GadgetClassifier(GadgetMapper):
 
             if self.SP in str(reg_out):
                 move = extract_offset(inputs)[1]
-                continue
+                #continue
 
             if self.IP in str(reg_out):
                 if last_mnemonic == self.RET:
@@ -309,25 +309,29 @@ class GadgetSolver(GadgetMapper):
 
         stack_changed = []
         move = 0
-        for reg, constraint in gadget_mapper:
-            if "sp" in str(reg):
-                move = extract_offset(gadget_mapper[reg])[1]
-                continue
+        for reg_out, constraint in gadget_mapper:
+            if "sp" in str(reg_out):
+                move = extract_offset(gadget_mapper[reg_out])[1]
 
-            if str(reg) in conditions.keys():
-                model = self._prove(conditions[str(reg)] == constraint.to_smtlib())
+            if str(reg_out) in conditions.keys():
+                model = self._prove(conditions[str(reg_out)] == constraint.to_smtlib())
                 if not model:
                     return None
 
-                sp_reg = locations_of(gadget_mapper[reg])
+                sp_reg = locations_of(gadget_mapper[reg_out])
                 if isinstance(sp_reg, list):
                     sp_reg = [str(i) for i in sp_reg]
                 else:
                     sp_reg = str(sp_reg)
-                if gadget_mapper[reg]._is_mem and any(["sp" in i for i in sp_reg]):
-                    num = model[model[1]].num_entries()
-                    stack_changed += model[model[1]].as_list()[:num]
-
+                
+                possible_type = [mem, reg, op]
+                if any([isinstance(gadget_mapper[reg_out], t) for t in possible_type])\
+                   and any(["sp" in i for i in sp_reg]) :
+                    try:
+                        num = model[model[1]].num_entries()
+                        stack_changed += model[model[1]].as_list()[:num]
+                    except IndexError:
+                        return None
         if len(stack_changed) == 0:
             return None
 
@@ -470,10 +474,11 @@ class GadgetFinder(object):
                 gg = self.__deduplicate(gg)
 
 
-                if self.arch == self.capstone.CS_ARCH_X86:
-                    gg = self.__simplify_x86(gg)
-                elif self.arch == self.capstone.CS_ARCH_ARM:
-                    gg = self.__simplify_arm(gg)
+                if self.need_filter:
+                    if self.arch == self.capstone.CS_ARCH_X86:
+                        gg = self.__simplify_x86(gg)
+                    elif self.arch == self.capstone.CS_ARCH_ARM:
+                        gg = self.__simplify_arm(gg)
 
                 for gadget in gg:
                     out[gadget.address] = gadget

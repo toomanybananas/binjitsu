@@ -950,23 +950,35 @@ class ROP(object):
             outputs = []
             for i in gad_1.regs.keys():
                 if isinstance(i, (str, unicode)) and ("ip" not in i and "pc" not in i):
-                    outputs.append(i)
+
+                    # Drop gadgets which set to themselves.
+                    # For {"esp":["esp"]} or {"eax":"eax"}
+                    in_reg = gad_1.regs[i]
+                    if isinstance(in_reg, list):
+                        in_reg = "".join(in_reg)
+
+                    if in_reg != i:
+                        outputs.append(i)
 
             for gad_2 in gadgets.values():
                 if gad_1 == gad_2:
                     continue
                 inputs=[]
-                for i in gad_2.regs.values():
+                for k, i in gad_2.regs.items():
+
+                    # Drop gadgets which set to themselves.
+                    # For {"esp":["esp"]} or {"eax":"eax"}
                     if isinstance(i, (str, unicode)):
-                        inputs.append(i)
+                        if k != i:
+                            inputs.append(i)
                     elif isinstance(i, list):
-                        for j in i:
-                            if isinstance(j, (str, unicode)):
-                                inputs.append(j)
+                        if k != "".join(i):
+                            inputs += i
+
                 inter = set(inputs) & set(outputs)
                 if len(inter) > 0:
                     gadget_graph[gad_1].add(gad_2)
-        
+
         return gadget_graph
 
 
@@ -1048,13 +1060,15 @@ class ROP(object):
         start = set()
         for gadget in self.gadgets.values():
             gadget_srcs = []
-            for i in gadget.regs.values():
+            for k,i in gadget.regs.items():
                 if isinstance(i , Mem):
                     gadget_srcs.append(i.reg)
                 elif isinstance(i, list):
-                    gadget_srcs.extend([str(x) for x in i])
+                    if k not in str(i):
+                        gadget_srcs.extend([str(x) for x in i])
                 elif isinstance(i, str):
-                    gadget_srcs.append(i)
+                    if k != i:
+                        gadget_srcs.append(i)
             if any([src in i for i in gadget_srcs]):
                 start.add(gadget)
 
@@ -1067,7 +1081,14 @@ class ROP(object):
         for gadget in self.gadgets.values():
             the_insns = "; ".join(gadget.insns)
             asm_instr_dict[the_insns] = gadget
-            gadget_dsts = gadget.regs.keys()
+            gadget_dsts = []
+            for k, i in gadget.regs.items():
+                if isinstance(i, list):
+                    if k not in str(i):
+                        gadget_dsts.append(k)
+                elif isinstance(i, str):
+                    if k != i:
+                        gadget_dsts.append(k)
             for reg in regs:
                 if reg in gadget_dsts:
                     alldst[reg].add(the_insns)
@@ -1083,7 +1104,7 @@ class ROP(object):
                 for e in list(end):
                     path = self.__dfs(self.gadget_graph, s, e)
                     paths += list(path)
-         
+
         # Give every reg a random num
         cond = {}
         for reg in regs:
