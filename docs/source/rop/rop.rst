@@ -2,8 +2,8 @@
 
    from pwn import *
 
-:mod:`pwnlib.rop.srop` --- Sigreturn Oriented Programming
+:mod:`pwnlib.rop.srop` --- Return Oriented Programming
 ==========================================================
 
-.. automodule:: pwnlib.rop.srop
+.. automodule:: pwnlib.rop.rop
    :members:

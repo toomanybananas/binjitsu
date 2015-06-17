@@ -53,6 +53,7 @@ from glob import glob
 from os import environ
 from os import path
 
+from . import atexit
 from . import shellcraft
 from .context import context, LocalContext
 from .log import getLogger
@@ -348,16 +349,8 @@ def cpp(shellcode):
     ]
     return _run(cmd, code).strip('\n').rstrip() + '\n'
 
-elf_template = '''
-.global _start
-.global __start
-.text
-_start:
-__start:
-'''
-
 @LocalContext
-def make_elf_from_assembly(assembly, vma = 0x400000):
+def make_elf_from_assembly(assembly, vma = 0x10000000):
     r"""
     Builds an ELF file with the specified assembly as its
     executable code.
@@ -375,7 +368,7 @@ def make_elf_from_assembly(assembly, vma = 0x400000):
     return path
 
 @LocalContext
-def make_elf(data, vma = None, strip=True, extract=True):
+def make_elf(data, vma = 0x10000000, strip=True, extract=True):
     r"""
     Builds an ELF file with the specified binary data as its
     executable code.
@@ -404,6 +397,8 @@ def make_elf(data, vma = None, strip=True, extract=True):
         >>> p.recvline()
         'Hello\n'
     """
+    retval = None
+
     if context.arch == 'thumb':
         to_thumb = asm(shellcraft.arm.to_thumb(), arch='arm')
 
@@ -413,11 +408,11 @@ def make_elf(data, vma = None, strip=True, extract=True):
 
     assembler = _assembler()
     linker    = _linker()
-    code      = elf_template
+    code      = _arch_header()
     code      += '.string "%s"' % ''.join('\\x%02x' % c for c in bytearray(data))
     code      += '\n'
 
-    log.debug(code)
+    log.debug("Building ELF:\n" + code)
 
     tmpdir    = tempfile.mkdtemp(prefix = 'pwn-asm-')
     step1     = path.join(tmpdir, 'step1-asm')
@@ -430,11 +425,12 @@ def make_elf(data, vma = None, strip=True, extract=True):
 
         _run(assembler + ['-o', step2, step1])
 
-        load_addr = []
-        if vma is not None:
-            load_addr = ['-Ttext-segment=%#x' % vma]
+        linker_options = []
+        linker_options += ['--section-start=.shellcode=%#x' % vma,
+                           '--entry=%#x' % vma]
+        linker_options += ['-o', step3, step2]
 
-        _run(linker    + load_addr + ['-N', '-o', step3, step2])
+        _run(linker + linker_options)
 
         if strip:
             _run([which_binutils('objcopy'), '-Sg', step3])
@@ -442,14 +438,17 @@ def make_elf(data, vma = None, strip=True, extract=True):
 
         if not extract:
             os.chmod(step3, 0755)
-            return step3
+            retval = step3
 
-        with open(step3, 'r') as f:
-            return f.read()
+        else:
+            with open(step3, 'r') as f:
+                retval = f.read()
     except Exception:
         log.exception("An error occurred while building an ELF:\n%s" % code)
     else:
-        shutil.rmtree(tmpdir)
+        atexit.register(lambda: shutil.rmtree(tmpdir))
+
+    return retval
 
 @LocalContext
 def asm(shellcode, vma = 0, extract = True):
@@ -525,7 +524,7 @@ def asm(shellcode, vma = 0, extract = True):
             relocs = subprocess.check_output(
                 [which_binutils('readelf'), '-r', step2]
             ).strip()
-            if len(relocs.split('\n')) > 1:
+            if extract and len(relocs.split('\n')) > 1:
                 log.error('Shellcode contains relocations:\n%s' % relocs)
         else:
             shutil.copy(step2, step3)
@@ -541,8 +540,9 @@ def asm(shellcode, vma = 0, extract = True):
     except Exception:
         log.exception("An error occurred while assembling:\n%s" % code)
     else:
-        shutil.rmtree(tmpdir)
-        return result
+        atexit.register(lambda: shutil.rmtree(tmpdir))
+
+    return result
 
 @LocalContext
 def disasm(data, vma = 0, byte = True, offset = True):
@@ -628,7 +628,7 @@ def disasm(data, vma = 0, byte = True, offset = True):
     except Exception:
         log.exception("An error occurred while disassembling:\n%s" % data)
     else:
-        shutil.rmtree(tmpdir)
+        atexit.register(lambda: shutil.rmtree(tmpdir))
 
 
     lines = []
