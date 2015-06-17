@@ -553,7 +553,6 @@ class ROP(object):
 
         this_ip = ip_reg[self.arch]
         
-        reg_without_ip = values.keys()
 
         # Combine the same gadgets together.
         # See the comments above.
@@ -563,8 +562,13 @@ class ROP(object):
         gadget_list = collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-len(t[1]), 
                       len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
 
-
+        
+        reg_without_ip = values.keys()
         remain_regs = set(reg_without_ip)
+
+        # Try to match a path based on remain registers.
+        # If matched, verify this path, and caculate the remain registers.
+        # If not, continue to match, until there are no paths in gadget_list
         for path_hash, regs in gadget_list.items():
 
             if not remain_regs:
@@ -584,6 +588,9 @@ class ROP(object):
                     continue
 
                 remain_regs -= regs
+
+        if len(remain_regs) > 0:
+            log.error("Gadget to regs %r not found!" % list(remain_regs))
 
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
