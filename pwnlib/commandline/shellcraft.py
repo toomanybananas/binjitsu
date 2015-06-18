@@ -119,6 +119,21 @@ p.add_argument(
     action='store_true'
 )
 
+p.add_argument(
+    '--color',
+    help="Color output",
+    action='store_true',
+    default=sys.stdout.isatty()
+)
+
+p.add_argument(
+    '--no-color',
+    help="Disable color output",
+    action='store_false',
+    dest='color'
+)
+
+
 def main():
     # Banner must be added here so that it doesn't appear in the autodoc
     # generation for command line tools
@@ -208,20 +223,29 @@ def main():
 
 
     if args.format in ['a', 'asm', 'assembly']:
+        if args.color:
+            from pygments import highlight
+            from pygments.formatters import TerminalFormatter
+            from pwnlib.lexer import PwntoolsLexer
+
+            code = highlight(code, PwntoolsLexer(), TerminalFormatter())
+
         print code
         exit()
     if args.format == 'p':
         print cpp(code)
         exit()
 
-    code = asm(code)
 
     if args.format in ['e','elf']:
         args.format = 'default'
-        code = make_elf(code)
+        code = read(make_elf_from_assembly(code, vma=None))
+        os.fchmod(args.out.fileno(), 0700)
+    else:
+        code = asm(code)
 
     if args.format == 'default':
-        if sys.stdout.isatty():
+        if args.out.isatty():
             args.format = 'hex'
         else:
             args.format = 'raw'
@@ -248,8 +272,8 @@ def main():
         code = hexii(code) + '\n'
 
     if not sys.stdin.isatty():
-        sys.stdout.write(sys.stdin.read())
+        args.out.write(sys.stdin.read())
 
-    sys.stdout.write(code)
+    args.out.write(code)
 
 if __name__ == '__main__': main()

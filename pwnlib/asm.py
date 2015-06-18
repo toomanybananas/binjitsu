@@ -28,7 +28,7 @@ Assembly
     in the :mod:`shellcraft` module.
 
         >>> asm(shellcraft.sh())
-        'jhh///sh/bin\x89\xe31\xc9j\x0bX\x99\xcd\x80'
+        'jhh///sh/binj\x0bX\x89\xe31\xc9\x99\xcd\x80'
 
 Disassembly
 ------------------------
@@ -222,7 +222,7 @@ def _include_header():
 
 
 def _arch_header():
-    prefix  = ['.section .shellcode,"ax"']
+    prefix  = ['.section .shellcode,"ax"', '.global _start', '_start:']
     headers = {
         'i386'  :  ['.intel_syntax noprefix'],
         'amd64' :  ['.intel_syntax noprefix'],
@@ -368,7 +368,7 @@ def make_elf_from_assembly(assembly, vma = 0x10000000):
     return path
 
 @LocalContext
-def make_elf(data, vma = 0x10000000, strip=True, extract=True):
+def make_elf(data, vma = None, strip=True, extract=True):
     r"""
     Builds an ELF file with the specified binary data as its
     executable code.
@@ -426,8 +426,9 @@ def make_elf(data, vma = 0x10000000, strip=True, extract=True):
         _run(assembler + ['-o', step2, step1])
 
         linker_options = []
-        linker_options += ['--section-start=.shellcode=%#x' % vma,
-                           '--entry=%#x' % vma]
+        if vma:
+            linker_options += ['--section-start=.shellcode=%#x' % vma,
+                               '--entry=%#x' % vma]
         linker_options += ['-o', step3, step2]
 
         _run(linker + linker_options)
@@ -508,16 +509,16 @@ def asm(shellcode, vma = 0, extract = True):
 
         _run(assembler + ['-o', step2, step1])
 
-        if not vma and not extract:
-            vma = 0x400000
-
         if not vma:
             shutil.copy(step2, step3)
 
-        if vma:
-             _run(linker + ['--section-start=.shellcode=%#x' % vma,
-                            '--entry=%#x' % vma,
-                            '-o', step3, step2])
+        if vma or not extract:
+            ldflags = ['-o', step3, step2]
+            if vma:
+                ldflags += ['--section-start=.shellcode=%#x' % vma,
+                            '--entry=%#x' % vma]
+
+            _run(linker + ldflags)
 
         elif file(step2,'rb').read(4) == '\x7fELF':
             # Sanity check for seeing if the output has relocations
@@ -545,7 +546,7 @@ def asm(shellcode, vma = 0, extract = True):
     return result
 
 @LocalContext
-def disasm(data, vma = 0, byte = True, offset = True):
+def disasm(data, vma = 0, byte = True, offset = True, instructions = True):
     """disasm(data, ...) -> str
 
     Disassembles a bytestring into human readable assembler.
@@ -646,7 +647,8 @@ def disasm(data, vma = 0, byte = True, offset = True):
             line += o
         if byte:
             line += b
-        line += i
+        if instructions:
+            line += i
         lines.append(line)
 
     return '\n'.join(lines)

@@ -131,7 +131,7 @@ Let's try it out!
 
     >>> p = process(binary.path)
     >>> p.send(raw_rop)
-    >>> print p.recvall(timeout=1)
+    >>> print p.recvall(timeout=5)
     The flag
 
 ROP + Sigreturn
@@ -193,8 +193,9 @@ Let's try it out!
 
     >>> p = process(binary.path)
     >>> p.send(str(rop))
+    >>> time.sleep(1)
     >>> p.sendline('echo hello; exit')
-    >>> p.recvline(timeout=1)
+    >>> p.recvline()
     'hello\n'
 """
 import collections
@@ -300,8 +301,8 @@ class ROP(object):
        # '\xfc\x82\x04\x08\xef\xbe\xad\xde\x00\x00\x00\x00\xa8\x96\x04\x08'
 
     >>> context.clear(arch = "i386", kernel = 'amd64')
-    >>> write('/tmp/rop_elf_x86', make_elf(asm('int 0x80; ret; add esp, 0x10; ret; pop eax; ret')))
-    >>> e = ELF('/tmp/rop_elf_x86')
+    >>> assembly = 'int 0x80; ret; add esp, 0x10; ret; pop eax; ret'
+    >>> e = ELF.from_assembly(assembly)
     >>> e.symbols['funcname'] = e.address + 0x1234
     >>> r = ROP(e)
     >>> r.funcname(1, 2)
