@@ -934,12 +934,12 @@ class ROP(object):
                 if address != stack.next:
                     stack.describe(slot.name)
                 
-                head_or_tail_flag = False
+                head_or_tail_added = False
                 if self.arch == "arm" and remaining > 0  and tail:
                     stack.extend(tail)
-                    head_or_tail_flag = True
+                    head_or_tail_added = True
 
-                if not head_or_tail_flag:
+                if not head_or_tail_added:
                     stack.append(slot.target)
 
                 # For any remaining arguments, put them on the stack
