@@ -603,15 +603,47 @@ class ROP(object):
 
         if len(remain_regs) > 0:
             log.error("Gadget to regs %r not found!" % list(remain_regs))
-        
+
         # Top sort to decide the reg order.
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
+
         ordered_out = self.flat_as_on_stack(ordered_out)
 
         return ordered_out
+
+    def add_blx_pop_for_arm(self):
+        """Similaly to simplify() in gadgetfinder.py file.
+        """
+        blx_pop_fine    = re.compile(r'^blx r[4-9]; pop \{.*pc\}$')
+
+        gadgets_list = ["; ".join(gadget.insns) for gadget in self.gadgets.values()]
+        gadgets_dict = {"; ".join(gadget.insns) : gadget for gadget in self.gadgets.values()}
+
+        def re_match(re_exp):
+            result = [gadget for gadget in gadgets_list if re_exp.match(gadget)]
+            return sorted(result, key=lambda t:len(t))
+
+        match_list = re_match(blx_pop_fine)
+
+        return [gadgets_dict[i] for i in match_list]
+
     
+    def flat_a_gadget_without_conditions(self, gadget):
+        value_to_flat = {"tail":([gadget],
+                                 gadget.move,
+                                 {})}
+        result = self.flat_as_on_stack(value_to_flat)
+        return result["tail"]
+
+
+    def add_func_head_for_arm_lr(self, target_address):
+        return None
+
+
     def handle_non_ret_branch(self, path, regs):
+        """If last instruction is call xxx/jmp xxx, Handle this scenairo.
+        """
         CALL = {  "i386"    : "call",
                   "amd64"   : "call",
                   "arm"     : "blx"}[self.arch]
@@ -663,6 +695,7 @@ class ROP(object):
 
         for k, v in self.gadgets.items():
             instr = "; ".join(v.insns)
+
             if RET_GAD.match(instr):
                 self.ret_to_stack_gadget = v
                 return v
@@ -864,13 +897,32 @@ class ROP(object):
                 stack.describe(self.describe(slot))
 
                 registers    = dict(zip(slot.abi.register_arguments, slot.args))
-                setRegisters = self.setRegisters(registers)
+                tail = None
+                operand = ""
+                if remaining and self.arch == "arm":
+                    func_tail = self.add_blx_pop_for_arm() 
+                    for gadget in func_tail:
+                        operand = gadget.insns[0].split()[1] 
+                        registers.update({operand : slot.target})
+                        try:
+                            tail = self.flat_a_gadget_without_conditions(gadget)
+                            setRegisters = self.setRegisters(registers)
+                            break
+                        except:
+                            continue
+
+                    if not tail:
+                        log.error("Cannot set registers %r properly." % registers)
+
+                else:
+                    setRegisters = self.setRegisters(registers)
+
 
                 for register, gadgets in setRegisters.items():
                     regs        = register.split("_")
                     values      = []
                     for reg in regs:
-                        if reg != "pc" and reg != "eip" and reg != "rip":
+                        if reg != "pc" and reg != "eip" and reg != "rip" and reg != operand:
                             values.append(registers[reg])
 
                     slot_indexs  = [slot.args.index(v) for v in values]
@@ -882,7 +934,13 @@ class ROP(object):
                 if address != stack.next:
                     stack.describe(slot.name)
                 
-                stack.append(slot.target)
+                head_or_tail_flag = False
+                if self.arch == "arm" and remaining > 0  and tail:
+                    stack.extend(tail)
+                    head_or_tail_flag = True
+
+                if not head_or_tail_flag:
+                    stack.append(slot.target)
 
                 # For any remaining arguments, put them on the stack
                 stackArguments = slot.args[len(slot.abi.register_arguments):]
@@ -895,24 +953,25 @@ class ROP(object):
                 # properly, but likely also need to adjust the stack past the
                 # arguments.
                 if slot.abi.returns:
-                    if remaining:
-                        fix_size  = (1 + len(stackArguments))
-                        fix_bytes = fix_size * context.bytes
-                        adjust   = self.search(move = fix_bytes)
+                    if stackArguments:
+                        if remaining:
+                            fix_size  = (1 + len(stackArguments))
+                            fix_bytes = fix_size * context.bytes
+                            adjust   = self.search(move = fix_bytes)
 
-                        if not adjust:
-                            log.error("Could not find gadget to adjust stack by %#x bytes" % fix_bytes)
+                            if not adjust:
+                                log.error("Could not find gadget to adjust stack by %#x bytes" % fix_bytes)
 
-                        nextGadgetAddr = stack.next + adjust.move
+                            nextGadgetAddr = stack.next + adjust.move
 
-                        stack.describe('<adjust: %s>' % self.describe(adjust))
-                        stack.append(adjust.address)
+                            stack.describe('<adjust: %s>' % self.describe(adjust))
+                            stack.append(adjust.address)
 
-                        for pad in range(fix_bytes, adjust.move, context.bytes):
-                            stackArguments.append(Padding())
-                    else:
-                        stack.describe('<pad>')
-                        stack.append(Padding())
+                            for pad in range(fix_bytes, adjust.move, context.bytes):
+                                stackArguments.append(Padding())
+                        else:
+                            stack.describe('<pad>')
+                            stack.append(Padding())
 
 
                 for i, argument in enumerate(stackArguments):
@@ -1124,7 +1183,12 @@ class ROP(object):
         move = move or 0
         regs = set(regs or ())
 
+        RET = { "i386"  : "ret",
+                "amd64" : "ret",
+                "arm"   : "pop"}[self.arch]
+
         for addr, gadget in self.gadgets.items():
+            if gadget.insns[-1].split()[0] != RET: continue
             if gadget.move < move:          continue
             if not (regs <= set(gadget.regs)):   continue
             yield gadget

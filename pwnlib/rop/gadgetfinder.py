@@ -609,7 +609,7 @@ class GadgetFinder(object):
         re_list = [pop_ax, pop_bx, pop_cx, pop_dx, pop_di, pop_si, 
                    pop_r8, pop_r9, leave, int80, syscall, sysenter]
 
-        return self.__simplify(gadgets, re_list)
+        return simplify(gadgets, re_list)
 
 
     def __filter_for_arm_big_binary(self, gadget):
@@ -667,26 +667,8 @@ class GadgetFinder(object):
 
         re_list = [blx_pop, blx_pop_fine, pop_r0, pop_r0_r1, pop_r0_r1_r2, pop_r0_r1_r2_r3, bx, pop_lr, svc]
 
-        return self.__simplify(gadgets, re_list)
+        return simplify(gadgets, re_list)
     
-    def __simplify(self, gadgets, re_list):
-
-        gadgets_list = ["; ".join(gadget.insns) for gadget in gadgets]
-        gadgets_dict = {"; ".join(gadget.insns) : gadget for gadget in gadgets}
-        
-        def re_match(re_exp):
-            result = [gadget for gadget in gadgets_list if re_exp.match(gadget)]
-            return sorted(result, key=lambda t:len(t))
-
-        match_list = [re_match(x) for x in re_list]
-
-        out = []
-        for i in match_list: 
-            if i:
-                item_01 = i[0]
-                out.append(gadgets_dict[item_01])
-        return out
-        
 
     def __checkMultiBr(self, decodes, branch_groups):
         """Caculate branch number for __passClean().
@@ -822,3 +804,22 @@ class GadgetDatabase(object):
             out[gadget.address] = gadget
          
         return out
+
+
+def simplify(gadgets, re_list):
+
+    gadgets_list = ["; ".join(gadget.insns) for gadget in gadgets]
+    gadgets_dict = {"; ".join(gadget.insns) : gadget for gadget in gadgets}
+
+    def re_match(re_exp):
+        result = [gadget for gadget in gadgets_list if re_exp.match(gadget)]
+        return sorted(result, key=lambda t:len(t))
+
+    match_list = [re_match(x) for x in re_list]
+
+    out = []
+    for i in match_list:
+        if i:
+            item_01 = i[0]
+            out.append(gadgets_dict[item_01])
+    return out
