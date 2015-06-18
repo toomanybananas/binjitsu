@@ -171,7 +171,7 @@ class GadgetClassifier(GadgetMapper):
         mapper = self.sym_exec_gadget_and_get_mapper(bytes, state=instruction_state)
         if not mapper:
             return None
-        
+
         regs = {}
         move = 0
         ip_move = 0
@@ -417,6 +417,7 @@ class GadgetFinder(object):
 
         arm_gadget = {
                 "ret":  [["[\x00-\xff]{1}[\x80-\x8f]{1}\xbd\xe8", 4, 4],       # pop {,pc}
+                         ["\x04\xf0\x9d\xe4", 4, 4],                           # pop {pc}
                         ],
                 "bx":   [["[\x10-\x19\x1e]{1}\xff\x2f\xe1", 4, 4],  # bx   reg
                         ],

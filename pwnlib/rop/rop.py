@@ -702,7 +702,7 @@ class ROP(object):
 
                 IP_reg = gadget.regs[PC]
                 if isinstance(IP_reg, Mem):
-                    know[IP_reg.offset] = path[i+1]
+                    know[sp + IP_reg.offset] = path[i+1]
 
                 sp += gadget.move
 
