@@ -423,7 +423,6 @@ class ROP(object):
         self.Verify = gf.solver
 
         self.initialized = False
-        self.builded = False
 
     @staticmethod
     @LocalContext
@@ -867,10 +866,6 @@ class ROP(object):
                 ``address: description`` for each address on the stack,
                 starting at ``base``.
         """
-        # This is a flag to avoid rebuilding the ROP chain. 
-        # This could save some times.
-        if self.builded:
-            return self.build_result
 
         if base is None:
             base = self.base or 0
@@ -1055,9 +1050,6 @@ class ROP(object):
             # Also, it may work in pwnlib.util.packing.flat()
             else:
                 pass
-
-        self.builded = True
-        self.build_result = stack
 
         return stack
 
