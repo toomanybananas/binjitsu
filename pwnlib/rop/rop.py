@@ -683,11 +683,20 @@ class ROP(object):
             return_to_stack_gadget = self.get_return_to_stack_gadget(last_mnemonic)
             if isinstance(pc_reg, Mem):
                 condition = {PC: return_to_stack_gadget.address}
+
             elif isinstance(pc_reg, (str, unicode)):
-                set_value_gadget = self.search_path("sp", [pc_reg])[0]
-                # TODO: The order need to be decided.
-                path = path[:-1] + set_value_gadget + [gadget] 
                 condition = {pc_reg: return_to_stack_gadget.address}
+
+                if pc_reg in gadget.regs.keys() and isinstance(gadget.regs[pc_reg], Mem):
+                    return (path, return_to_stack_gadget, condition)
+
+                set_value_gadget = self.search_path("sp", [pc_reg])[0]
+                if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
+                    if path[:-1] and set_value_gadget[0] != path[-2]:
+                        path = path[:-1] + set_value_gadget + [gadget] 
+                    elif not path[:-1]:
+                        path = set_value_gadget + [gadget] 
+                        
             else:
                 return None
 
