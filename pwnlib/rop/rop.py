@@ -672,7 +672,7 @@ class ROP(object):
         last_mnemonic   = last_instr[0]
         if last_mnemonic == CALL or last_mnemonic == JUMP:
             pc_reg = gadget.regs[PC]
-            return_to_stack_gadget = self.get_return_to_stack_gadget()
+            return_to_stack_gadget = self.get_return_to_stack_gadget(last_mnemonic)
             if isinstance(pc_reg, Mem):
                 condition = {PC: return_to_stack_gadget.address}
             elif isinstance(pc_reg, (str, unicode)):
@@ -685,20 +685,18 @@ class ROP(object):
 
         return (path, return_to_stack_gadget, condition)
     
-    def get_return_to_stack_gadget(self):
-        RET_GAD = { "i386"  : re.compile(r'(pop (.{3}); )+ret$'),
-                    "amd64" : re.compile(r'(pop (.{3}); )+ret$'),
-                    "arm"   : re.compile(r'^pop \{.+pc\}')}[self.arch]
+    def get_return_to_stack_gadget(self, last_mnemonic):
+        if last_mnemonic == "call":
+            RET_GAD = re.compile(r'(pop (.{3}); )+ret$')
+        else:
+            RET_GAD = { "i386"  : re.compile(r'(pop (.{3}); )*ret$'),
+                        "amd64" : re.compile(r'(pop (.{3}); )*ret$'),
+                        "arm"   : re.compile(r'^pop \{.*pc\}')}[self.arch]
 
-        if self.ret_to_stack_gadget:
-            return self.ret_to_stack_gadget
-
-        for k, v in self.gadgets.items():
-            instr = "; ".join(v.insns)
-
-            if RET_GAD.match(instr):
-                self.ret_to_stack_gadget = v
-                return v
+        # Find all matched gadgets, choose the shortest one. 
+        match_list = [gad for gad in self.gadgets.values() if RET_GAD.match("; ".join(gad.insns))]
+        sorted_match_list = sorted(match_list, key=lambda t:len("; ".join(t.insns)))
+        return sorted_match_list[0]
 
     def flat_as_on_stack(self, ordered_dict):
         """Convert the values in ordered_dict to the sequence of stack values.
