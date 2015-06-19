@@ -698,6 +698,10 @@ class ROP(object):
                 #       previous        : pop {r0, pc}
                 #       set_value_gadget: pop {r0, r1, pc} need to set r1
                 #       Delete the previous one.
+                # 3. for others:
+                #       If set_value_gadget not the part of path[:-1],
+                #       Then, simply insert the set_value_gadget before the last gadget in path.
+                #       Maybe some bugs here, need test cases.
                 if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
                     if path[:-1] and set_value_gadget[0] != path[-2]:
                         if not (set(path[-2].regs.keys()) - set(set_value_gadget[0].regs.keys())):
