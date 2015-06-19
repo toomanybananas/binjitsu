@@ -573,19 +573,25 @@ class ROP(object):
         # If not, continue to match, until there are no paths in gadget_list
         for path_hash, regs in gadget_list.items():
 
-            if used_regs == remain_regs:
+            if not remain_regs:
                 break
 
-            if all(i in remain_regs for i in regs):
+            if remain_regs & regs:
                 path = ropgadgets[path_hash]
                 result = self.handle_non_ret_branch(path, regs)
                 if not result:
                     continue
 
                 path, return_to_stack_gadget, conditions = result
-                for reg in regs:
+                
+                # If conditions'key in Gadget's registers.
+                # Handle this conflict.
+                if conditions and conditions.keys()[0] in regs:
+                    regs.remove(conditions.keys()[0])
 
+                for reg in regs:
                     reg64 = reg
+
                     # x64: rax, eax reg[-2:] == ax
                     if self.arch == "amd64":
                         reg64 = "r" + reg[-2:]
@@ -600,9 +606,10 @@ class ROP(object):
                 else:
                     continue
 
+                remain_regs -= (regs - used_regs)
                 used_regs |= regs
 
-        if used_regs != remain_regs:
+        if remain_regs:
             log.error("Gadget to regs %r not found!" % list(remain_regs))
 
         # Top sort to decide the reg order.
