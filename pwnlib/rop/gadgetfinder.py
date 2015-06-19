@@ -663,7 +663,7 @@ class GadgetFinder(object):
         pop_r0_r1_r2_r3 = re.compile(r'^pop \{r0, r1, r2, r3, .*pc\}$')
         bx              = re.compile(r'^bx r[0-4]$')
         pop_lr          = re.compile(r'^pop \{.*lr\}.*pop \{.*pc\}$')
-        svc             = re.compile(r'^svc$')
+        svc             = re.compile(r'^svc')
 
         re_list = [blx_pop, blx_pop_fine, pop_r0, pop_r0_r1, pop_r0_r1_r2, pop_r0_r1_r2_r3, bx, pop_lr, svc]
 
