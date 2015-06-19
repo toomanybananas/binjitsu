@@ -58,8 +58,8 @@ Example:
             mov al, 0xc0
             xor ebp, ebp
             xor ebx, ebx
-            xor ecx, ecx /* mov ecx, 0x1000 */
-            mov ch, 0x10
+            xor ecx, ecx
+            mov ch, 0x1000 >> 8
             push -1
             pop edi
             push (PROT_READ | PROT_WRITE | PROT_EXEC) /* 0x7 */
@@ -94,7 +94,7 @@ Example:
   regctx    = dict(zip(registers, arguments))
 %>\
     /* call ${syscall_repr} */
-%if any(arguments):
+%if any(a is not None for a in arguments):
     ${i386.setregs(regctx)}
 %endif
     int 0x80
