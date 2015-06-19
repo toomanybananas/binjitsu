@@ -566,13 +566,14 @@ class ROP(object):
 
         reg_without_ip = values.keys()
         remain_regs = set(reg_without_ip)
+        used_regs = set()
 
         # Try to match a path based on remain registers.
         # If matched, verify this path, and caculate the remain registers.
         # If not, continue to match, until there are no paths in gadget_list
         for path_hash, regs in gadget_list.items():
 
-            if not remain_regs:
+            if used_regs == remain_regs:
                 break
 
             if all(i in remain_regs for i in regs):
@@ -599,9 +600,9 @@ class ROP(object):
                 else:
                     continue
 
-                remain_regs -= regs
+                used_regs |= regs
 
-        if len(remain_regs) > 0:
+        if used_regs != remain_regs:
             log.error("Gadget to regs %r not found!" % list(remain_regs))
 
         # Top sort to decide the reg order.
