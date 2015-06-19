@@ -702,6 +702,7 @@ class GadgetFinder(object):
         call    = re.compile(r'^call ...$')
         int80   = re.compile(r'int +0x80')
         ret     = re.compile(r'^ret$')
+        svc     = re.compile(r'^svc$')
 
         first_instr = (decodes[0].mnemonic + " " + decodes[0].op_str)
         last_instr  = (decodes[-1].mnemonic + " " + decodes[-1].op_str)
@@ -710,15 +711,15 @@ class GadgetFinder(object):
         # 1. call reg; xxx; ret
         # 2. blx reg; xxx; pop {.*pc}
         # 3. int 0x80; xxx; ret
+        # 4. svc; xxx; pop {.*pc}
         if call.match(first_instr) and ret.match(last_instr):
             return True
-        
         if blx.match(first_instr) and pop_pc.match(last_instr):
             return True
-
         if int80.match(first_instr) and ret.match(last_instr):
             return True
-
+        if svc.match(first_instr) and pop_pc.match(last_instr):
+            return True
 
         if len(decodes) > 5:
             return False
