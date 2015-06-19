@@ -691,12 +691,25 @@ class ROP(object):
                     return (path, return_to_stack_gadget, condition)
 
                 set_value_gadget = self.search_path("sp", [pc_reg])[0]
+
+                # Handle these issues:
+                # 1. set_value_gadget same as last(-1) one or previous(-2) one, ignore it
+                # 2. set_value_gadget can do the previous do; such as :
+                #       previous        : pop {r0, pc}
+                #       set_value_gadget: pop {r0, r1, pc} need to set r1
+                #       Delete the previous one.
                 if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
                     if path[:-1] and set_value_gadget[0] != path[-2]:
-                        path = path[:-1] + set_value_gadget + [gadget] 
+                        if not (set(path[-2].regs.keys()) - set(set_value_gadget[0].regs.keys())):
+                            path = path[:-2] + set_value_gadget + [gadget]
+                        else:
+                            path = path[:-1] + set_value_gadget + [gadget] 
                     elif not path[:-1]:
                         path = set_value_gadget + [gadget] 
-                        
+                elif len(set_value_gadget) > 1:
+                    if not (set(set_value_gadget) - set(path[:-1])):
+                        path = path[:-1] + set_value_gadget + [gadget]
+
             else:
                 return None
 
