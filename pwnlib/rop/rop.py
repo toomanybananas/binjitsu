@@ -593,8 +593,12 @@ class ROP(object):
         # If matched, verify this path, and caculate the remain registers.
         # If not, continue to match, until there are no paths in gadget_list
         while True:
-            path_hash, regs = gadget_list.popitem(0)
-            if not remain_regs or not gadget_list:
+            if gadget_list:
+                path_hash, regs = gadget_list.popitem(0)
+            else:
+                break
+
+            if not remain_regs:
                 break
 
             if remain_regs & regs:
@@ -683,13 +687,16 @@ class ROP(object):
         # Inital the result
         condition = {}
         return_to_stack_gadget = None
-        
+
+        # This one for "bx lr"
+        exception_operand = "lr"
+
         additional = {}
         for i in range(len(path)):
             gadget = path[i]
             instr = gadget.insns[-1].split()
             mnemonic   = instr[0]
-            if mnemonic == self.CALL or mnemonic == self.JUMP:
+            if mnemonic == self.CALL or (mnemonic == self.JUMP and instr[1] != exception_operand):
                 pc_reg = gadget.regs[self.PC]
                 return_to_stack_gadget = self.get_return_to_stack_gadget(mnemonic)
                 if isinstance(pc_reg, Mem):
@@ -794,11 +801,12 @@ class ROP(object):
             outrop.append(ropgadget[0])
 
             i = 0
-            while i < (move - self.align ):
+            while i < (move - self.align ) or stack_result:
                 if i in stack_result.keys():
                     temp_packed = 0
                     for j in range(self.align):
                         temp_packed += stack_result[i+j] << 8*j
+                        stack_result.pop(i+j)
                     outrop.append(temp_packed)
                     i += self.align
                 elif i in know.keys():
