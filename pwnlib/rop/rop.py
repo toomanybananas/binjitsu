@@ -625,7 +625,6 @@ class ROP(object):
                     conditions[reg64] = values[reg]
 
                 result = self.Verify.verify_path(path, conditions)
-                print result
                 if result:
                     sp, stack = result
                     if return_to_stack_gadget:
@@ -650,7 +649,7 @@ class ROP(object):
         # Top sort to decide the reg order.
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
-        print ordered_out
+
         ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
 
         return ordered_out
