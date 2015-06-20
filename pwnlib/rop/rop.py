@@ -588,9 +588,7 @@ class ROP(object):
 
             if remain_regs & regs:
                 path = ropgadgets[path_hash]
-                print path
                 result = self.handle_non_ret_branch(path, regs)
-                print result,"xxx"
                 if not result:
                     continue
 
@@ -631,7 +629,7 @@ class ROP(object):
         # Top sort to decide the reg order.
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
-        print ordered_out
+
         ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
 
         return ordered_out
@@ -1476,7 +1474,7 @@ class ROP(object):
                 if isinstance(i , Mem):
                     gadget_srcs.append(i.reg)
                 elif isinstance(i, list):
-                    if k not in str(i):
+                    if all([k!=j for j in i]):
                         gadget_srcs.extend([str(x) for x in i])
                 elif isinstance(i, str):
                     if k != i:
@@ -1496,7 +1494,7 @@ class ROP(object):
             gadget_dsts = []
             for k, i in gadget.regs.items():
                 if isinstance(i, list):
-                    if k not in str(i):
+                    if all([k!=j for j in i]):
                         gadget_dsts.append(k)
                 elif isinstance(i, str):
                     if k != i:
