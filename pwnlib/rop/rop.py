@@ -423,12 +423,27 @@ class ROP(object):
         self.Verify = gf.solver
 
         self.initialized = False
+        self.__init_arch_info()
 
     @staticmethod
     @LocalContext
     def from_blob(blob, *a, **kw):
         return ROP(ELF.from_bytes(blob, *a, **kw))
-       
+
+    def __init_arch_info(self):
+        self.CALL = { "i386"    : "call",
+                      "amd64"   : "call",
+                      "arm"     : "blx"}[self.arch]
+        self.JUMP = { "i386"    : "jmp",
+                      "amd64"   : "jmp",
+                      "arm"     : "bx"}[self.arch]
+        self.PC   = { "i386"    : "eip",
+                      "amd64"   : "rip",
+                      "arm"     : "pc"}[self.arch]
+        self.RET  = { "i386"    : "ret",
+                      "amd64"   : "ret",
+                      "arm"     : "pop"}[self.arch]
+
     def __init_classify_and_solver(self):
         """
         Classify and solver gadgets as needed.
@@ -548,12 +563,7 @@ class ROP(object):
             # No need using two gadgets respectively.
             record(gadget_paths, reg)
 
-        ip_reg = {"i386" : "eip",
-                  "amd64": "rip",
-                  "arm"  : "pc"}
-
-        this_ip = ip_reg[self.arch]
-        
+        this_ip = self.PC
 
         # Combine the same gadgets together.
         # See the comments above.
@@ -566,6 +576,7 @@ class ROP(object):
         reg_without_ip = values.keys()
         remain_regs = set(reg_without_ip)
         used_regs = set()
+        additional_conditions = {}
 
         # Try to match a path based on remain registers.
         # If matched, verify this path, and caculate the remain registers.
@@ -577,11 +588,14 @@ class ROP(object):
 
             if remain_regs & regs:
                 path = ropgadgets[path_hash]
+                print path
                 result = self.handle_non_ret_branch(path, regs)
+                print result,"xxx"
                 if not result:
                     continue
 
-                path, return_to_stack_gadget, conditions = result
+                path, return_to_stack_gadget, conditions, additional = result
+                additional_conditions.update(additional)
                 
                 # If conditions'key in Gadget's registers.
                 # Handle this conflict.
@@ -601,6 +615,9 @@ class ROP(object):
                     sp, stack = result
                     if return_to_stack_gadget:
                         sp += return_to_stack_gadget.move
+                    for gadget in path:
+                        if "call" == gadget.insns[-1].split()[0]:
+                            sp -= self.align
                     out.append(("_".join(regs), (path, sp, stack)))
                 else:
                     continue
@@ -614,8 +631,8 @@ class ROP(object):
         # Top sort to decide the reg order.
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
-
-        ordered_out = self.flat_as_on_stack(ordered_out)
+        print ordered_out
+        ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
 
         return ordered_out
 
@@ -651,75 +668,61 @@ class ROP(object):
     def handle_non_ret_branch(self, path, regs):
         """If last instruction is call xxx/jmp xxx, Handle this scenairo.
         """
-        CALL = {  "i386"    : "call",
-                  "amd64"   : "call",
-                  "arm"     : "blx"}[self.arch]
-        JUMP = {  "i386"    : "jmp",
-                  "amd64"   : "jmp",
-                  "arm"     : "bx"}[self.arch]
-        PC   = {  "i386"    : "eip",
-                  "amd64"   : "rip",
-                  "arm"     : "pc"}[self.arch]
         # Inital the result
         condition = {}
         return_to_stack_gadget = None
         
-        # If call/jmp/blx in the path[:-1], not the last one.
-        # Discard this path.
-        path_len = len(path)
-        for i in range(path_len - 1):
+        additional = {}
+        for i in range(len(path)):
             gadget = path[i]
-            last_instr = gadget.insns[-1].split()
-            last_mnemonic   = last_instr[0]
-            if any([last_mnemonic == x for x in [CALL, JUMP]]):
-                return None
+            instr = gadget.insns[-1].split()
+            mnemonic   = instr[0]
+            if mnemonic == self.CALL or mnemonic == self.JUMP:
+                pc_reg = gadget.regs[self.PC]
+                return_to_stack_gadget = self.get_return_to_stack_gadget(mnemonic)
+                if isinstance(pc_reg, Mem):
+                    condition = {self.PC: return_to_stack_gadget.address}
 
-        gadget = path[-1]
-        last_instr = gadget.insns[-1].split()
-        last_mnemonic   = last_instr[0]
-        if last_mnemonic == CALL or last_mnemonic == JUMP:
-            pc_reg = gadget.regs[PC]
-            return_to_stack_gadget = self.get_return_to_stack_gadget(last_mnemonic)
-            if isinstance(pc_reg, Mem):
-                condition = {PC: return_to_stack_gadget.address}
+                elif isinstance(pc_reg, (str, unicode)):
+                    condition = {pc_reg: return_to_stack_gadget.address}
 
-            elif isinstance(pc_reg, (str, unicode)):
-                condition = {pc_reg: return_to_stack_gadget.address}
+                    if pc_reg in gadget.regs.keys() and isinstance(gadget.regs[pc_reg], Mem):
+                        return (path, return_to_stack_gadget, condition)
 
-                if pc_reg in gadget.regs.keys() and isinstance(gadget.regs[pc_reg], Mem):
-                    return (path, return_to_stack_gadget, condition)
+                    set_value_gadget = self.search_path("sp", [pc_reg])[0]
 
-                set_value_gadget = self.search_path("sp", [pc_reg])[0]
+                    # Handle these issues:
+                    # 1. set_value_gadget same as last(-1) one or previous(-2) one, ignore it
+                    # 2. set_value_gadget can do the previous do; such as :
+                    #       previous        : pop {r0, pc}
+                    #       set_value_gadget: pop {r0, r1, pc} need to set r1
+                    #       Delete the previous one.
+                    # 3. for others:
+                    #       If set_value_gadget not the part of path[:-1],
+                    #       Then, simply insert the set_value_gadget before the last gadget in path.
+                    #       Maybe some bugs here, need test cases.
+                    if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
+                        if path[:i] and set_value_gadget[0] != path[i-1]:
+                        #if path[:-1] and set_value_gadget[0] != path[-2]:
+                            if not (set(path[i-1].regs.keys()) - set(set_value_gadget[0].regs.keys())):
+                                path = path[:i-1] + set_value_gadget + path[i:]
+                            else:
+                                path = path[:i] + set_value_gadget + path[i:]
+                        elif not path[:i]:
+                            path = set_value_gadget + path[i:]
+                    elif len(set_value_gadget) > 1:
+                        if not (set(set_value_gadget) - set(path[:i])):
+                            path = path[:i] + set_value_gadget + path[i:]
 
-                # Handle these issues:
-                # 1. set_value_gadget same as last(-1) one or previous(-2) one, ignore it
-                # 2. set_value_gadget can do the previous do; such as :
-                #       previous        : pop {r0, pc}
-                #       set_value_gadget: pop {r0, r1, pc} need to set r1
-                #       Delete the previous one.
-                # 3. for others:
-                #       If set_value_gadget not the part of path[:-1],
-                #       Then, simply insert the set_value_gadget before the last gadget in path.
-                #       Maybe some bugs here, need test cases.
-                if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
-                    if path[:-1] and set_value_gadget[0] != path[-2]:
-                        if not (set(path[-2].regs.keys()) - set(set_value_gadget[0].regs.keys())):
-                            path = path[:-2] + set_value_gadget + [gadget]
-                        else:
-                            path = path[:-1] + set_value_gadget + [gadget] 
-                    elif not path[:-1]:
-                        path = set_value_gadget + [gadget] 
-                elif len(set_value_gadget) > 1:
-                    if not (set(set_value_gadget) - set(path[:-1])):
-                        path = path[:-1] + set_value_gadget + [gadget]
+                    additional["; ".join(gadget.insns)] = return_to_stack_gadget
 
-            else:
-                return None
+                else:
+                    return None
 
-        return (path, return_to_stack_gadget, condition)
+        return (path, return_to_stack_gadget, condition, additional)
     
-    def get_return_to_stack_gadget(self, last_mnemonic):
-        if last_mnemonic == "call":
+    def get_return_to_stack_gadget(self, mnemonic):
+        if mnemonic == "call":
             RET_GAD = re.compile(r'(pop (.{3}); )+ret$')
         else:
             RET_GAD = { "i386"  : re.compile(r'(pop (.{3}); )*ret$'),
@@ -729,9 +732,12 @@ class ROP(object):
         # Find all matched gadgets, choose the shortest one. 
         match_list = [gad for gad in self.gadgets.values() if RET_GAD.match("; ".join(gad.insns))]
         sorted_match_list = sorted(match_list, key=lambda t:len("; ".join(t.insns)))
-        return sorted_match_list[0]
+        if sorted_match_list:
+            return sorted_match_list[0]
+        else:
+            log.error("Cannot find a gadget return to stack.")
 
-    def flat_as_on_stack(self, ordered_dict):
+    def flat_as_on_stack(self, ordered_dict, additional_conditions):
         """Convert the values in ordered_dict to the sequence of stack values.
 
         Arguments:
@@ -743,10 +749,6 @@ class ROP(object):
             out(list):
                 A sequence of stack values.
         """
-
-        PC   = {  "i386"    : "eip",
-                  "amd64"   : "rip",
-                  "arm"     : "pc"}[self.arch]
 
         out = []
 
@@ -761,14 +763,20 @@ class ROP(object):
                 
                 gadget = path[i]
                 if i == path_len - 1:
-                    #sp += gadget.move - self.align
                     break
 
-                IP_reg = gadget.regs[PC]
-                if isinstance(IP_reg, Mem):
-                    know[sp + IP_reg.offset] = path[i+1]
+                gad_instr = "; ".join(gadget.insns)
+                additional = 0
+                if gad_instr in additional_conditions.keys():
+                    additional = additional_conditions[gad_instr].move - self.align
 
-                sp += gadget.move
+                IP_reg = gadget.regs[self.PC]
+                if isinstance(IP_reg, Mem):
+                    know[sp + IP_reg.offset + additional] = path[i+1]
+                else:
+                    know[sp + gadget.move + additional] = path[i+1]
+
+                sp += gadget.move + additional
 
 
             ropgadget, _, stack_result = result
@@ -949,7 +957,7 @@ class ROP(object):
                     regs        = register.split("_")
                     values      = []
                     for reg in regs:
-                        if reg != "pc" and reg != "eip" and reg != "rip" and reg != operand:
+                        if reg != self.PC and reg != operand:
                             values.append(registers[reg])
 
                     slot_indexs  = [slot.args.index(v) for v in values]
@@ -1207,12 +1215,8 @@ class ROP(object):
         move = move or 0
         regs = set(regs or ())
 
-        RET = { "i386"  : "ret",
-                "amd64" : "ret",
-                "arm"   : "pop"}[self.arch]
-
         for addr, gadget in self.gadgets.items():
-            if gadget.insns[-1].split()[0] != RET: continue
+            if gadget.insns[-1].split()[0] != self.RET: continue
             if gadget.move < move:          continue
             if not (regs <= set(gadget.regs)):   continue
             yield gadget
