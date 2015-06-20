@@ -563,15 +563,26 @@ class ROP(object):
             # No need using two gadgets respectively.
             record(gadget_paths, reg)
 
-        this_ip = self.PC
 
         # Combine the same gadgets together.
         # See the comments above.
         # Sort the dict using two args:
         #   arg1: number of registers, reverse order.
         #   arg2: length of path's instructions
-        gadget_list = collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-len(t[1]), 
-                      len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
+        def re_order(gadget_list, remain_regs=set()):
+            result = collections.OrderedDict()
+            temp = {}
+            for path_hash, regs in gadget_list.items():
+                if remain_regs:
+                    number = len(remain_regs & regs)
+                else:
+                    number = len(regs)
+                temp[path_hash] = number
+
+            return collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-temp[t[0]], 
+                          len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
+
+        gadget_list = re_order(gadget_list)
 
         reg_without_ip = values.keys()
         remain_regs = set(reg_without_ip)
@@ -581,8 +592,8 @@ class ROP(object):
         # Try to match a path based on remain registers.
         # If matched, verify this path, and caculate the remain registers.
         # If not, continue to match, until there are no paths in gadget_list
-        for path_hash, regs in gadget_list.items():
-
+        while True:
+            path_hash, regs = gadget_list.popitem(0)
             if not remain_regs:
                 break
 
@@ -622,6 +633,9 @@ class ROP(object):
 
                 remain_regs -= (regs - used_regs)
                 used_regs |= regs
+
+                if remain_regs:
+                    gadget_list = re_order(gadget_list, remain_regs)
 
         if remain_regs:
             log.error("Gadget to regs %r not found!" % list(remain_regs))
