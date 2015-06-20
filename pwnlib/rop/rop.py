@@ -692,18 +692,17 @@ class ROP(object):
                     set_value_gadget = self.search_path("sp", [pc_reg])[0]
 
                     # Handle these issues:
-                    # 1. set_value_gadget same as last(-1) one or previous(-2) one, ignore it
+                    # 1. set_value_gadget same as next(i) one or previous(i-1) one, ignore it
                     # 2. set_value_gadget can do the previous do; such as :
                     #       previous        : pop {r0, pc}
                     #       set_value_gadget: pop {r0, r1, pc} need to set r1
                     #       Delete the previous one.
                     # 3. for others:
-                    #       If set_value_gadget not the part of path[:-1],
+                    #       If set_value_gadget not the part of path[:i],
                     #       Then, simply insert the set_value_gadget before the last gadget in path.
                     #       Maybe some bugs here, need test cases.
                     if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
                         if path[:i] and set_value_gadget[0] != path[i-1]:
-                        #if path[:-1] and set_value_gadget[0] != path[-2]:
                             if not (set(path[i-1].regs.keys()) - set(set_value_gadget[0].regs.keys())):
                                 path = path[:i-1] + set_value_gadget + path[i:]
                             else:
@@ -711,7 +710,7 @@ class ROP(object):
                         elif not path[:i]:
                             path = set_value_gadget + path[i:]
                     elif len(set_value_gadget) > 1:
-                        if not (set(set_value_gadget) - set(path[:i])):
+                        if any([x!=y for x,y in zip(set_value_gadget[::-1], path[:i][::-1])]):
                             path = path[:i] + set_value_gadget + path[i:]
 
                     additional["; ".join(gadget.insns)] = return_to_stack_gadget
