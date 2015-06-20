@@ -736,7 +736,7 @@ class ROP(object):
         else:
             log.error("Cannot find a gadget return to stack.")
 
-    def flat_as_on_stack(self, ordered_dict, additional_conditions):
+    def flat_as_on_stack(self, ordered_dict, additional_conditions={}):
         """Convert the values in ordered_dict to the sequence of stack values.
 
         Arguments:
