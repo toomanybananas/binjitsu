@@ -153,6 +153,7 @@ class GadgetClassifier(GadgetMapper):
 
         Example:
             >>> from capstone    import CS_ARCH_X86, CS_MODE_64
+            >>> context.clear(arch='amd64')
             >>> gadget_to_be_classify = Gadget(0x1000, [u'pop rdi', u'ret'], {}, 0x0, "\x5f\xc3")
             >>> gc = GadgetClassifier(CS_ARCH_X86, CS_MODE_64)
             >>> gc.classify(gadget_to_be_classify) 

@@ -500,17 +500,17 @@ class ROP(object):
             >>> rop = ROP(binary)
             >>> rop.setRegisters({'eax': 1})
             OrderedDict([('eax', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 1])])
-            >>> setRegisters({'eax': 1, 'ecx': 0})
+            >>> rop.setRegisters({'eax': 1, 'ecx': 0})
             OrderedDict([('eax', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 1]), ('ecx', [Gadget(0x10000005, [u'pop ecx', u'ret'], {'eip': M32(M32(esp+4), #4), 'esp': ['esp'], 'ecx': M32(M32(esp), #0)}, 0x8), 0])])
 
             For complex cases, there is only one possible ordering:
 
-            >>> setRegisters({'eax': 1, 'ebx': 2})
+            >>> rop.setRegisters({'eax': 1, 'ebx': 2})
             OrderedDict([('ebx', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 2, Gadget(0x10000002, [u'mov ebx, eax', u'ret'], {'eip': M32(M32(esp), #0), 'ebx': 'eax', 'esp': ['esp']}, 0x4)]), ('eax', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 1])])
 
             Sometimes, it may not be possible/
 
-            >>> setRegisters({'esi': 0})
+            >>> rop.setRegisters({'esi': 0})
             <exception>
         """
         
