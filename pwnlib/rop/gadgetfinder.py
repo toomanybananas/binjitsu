@@ -353,6 +353,10 @@ class GadgetSolver(GadgetMapper):
         stack_converted = [(i[0].as_signed_long(), i[1].as_long()) for i in stack_changed]
         stack_changed = OrderedDict(sorted(stack_converted, key=itemgetter(0)))
 
+        # If we want to set esp/rsp, the total move value will be confused.
+        # So we add all the gadgets's move in the path for simply.
+        if any(["sp" in x for x in conditions.keys()]):
+            move = reduce(lambda x, y: x+ y, [gad.move for gad in path])
         return (move, stack_changed)
 
 
