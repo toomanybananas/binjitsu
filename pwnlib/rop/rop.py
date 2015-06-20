@@ -594,7 +594,7 @@ class ROP(object):
         # If not, continue to match, until there are no paths in gadget_list
         while True:
             path_hash, regs = gadget_list.popitem(0)
-            if not remain_regs:
+            if not remain_regs or not gadget_list:
                 break
 
             if remain_regs & regs:
