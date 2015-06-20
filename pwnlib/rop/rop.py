@@ -612,8 +612,9 @@ class ROP(object):
                 
                 # If conditions'key in Gadget's registers.
                 # Handle this conflict.
-                if conditions and conditions.keys()[0] in regs:
-                    regs.remove(conditions.keys()[0])
+                for conflict_key in conditions.keys():
+                    if conflict_key in regs:
+                        regs.remove(conditions.keys()[0])
 
                 for reg in regs:
                     reg64 = reg
@@ -624,6 +625,7 @@ class ROP(object):
                     conditions[reg64] = values[reg]
 
                 result = self.Verify.verify_path(path, conditions)
+                print result
                 if result:
                     sp, stack = result
                     if return_to_stack_gadget:
@@ -631,6 +633,7 @@ class ROP(object):
                     for gadget in path:
                         if "call" == gadget.insns[-1].split()[0]:
                             sp -= self.align
+                    sp, stack = self.check_ip_postion(path, conditions, (sp, stack))
                     out.append(("_".join(regs), (path, sp, stack)))
                 else:
                     continue
@@ -647,10 +650,24 @@ class ROP(object):
         # Top sort to decide the reg order.
         ordered_out = collections.OrderedDict(sorted(out,
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
-
+        print ordered_out
         ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
 
         return ordered_out
+
+    def check_ip_postion(self, path, conditions, result):
+        sp, stack = result
+        large_key = sorted(stack.keys())[-1]
+        large_position = large_key/self.align * self.align
+        if (large_position > sp - self.align):
+            # Need pop the value on large_position, then return to stack
+            return_to_stack_gadget = self.get_return_to_stack_gadget(move=large_position-sp+2*self.align)
+            conditions[self.PC] = return_to_stack_gadget.address
+            result = self.Verify.verify_path(path, conditions)
+            sp, stack = result
+            sp += return_to_stack_gadget.move
+
+        return sp, stack
 
     def add_blx_pop_for_arm(self):
         """Similaly to simplify() in gadgetfinder.py file.
@@ -739,7 +756,7 @@ class ROP(object):
 
         return (path, return_to_stack_gadget, condition, additional)
     
-    def get_return_to_stack_gadget(self, mnemonic):
+    def get_return_to_stack_gadget(self, mnemonic="", move=0):
         if mnemonic == "call":
             RET_GAD = re.compile(r'(pop (.{3}); )+ret$')
         else:
@@ -748,7 +765,7 @@ class ROP(object):
                         "arm"   : re.compile(r'^pop \{.*pc\}')}[self.arch]
 
         # Find all matched gadgets, choose the shortest one. 
-        match_list = [gad for gad in self.gadgets.values() if RET_GAD.match("; ".join(gad.insns))]
+        match_list = [gad for gad in self.gadgets.values() if RET_GAD.match("; ".join(gad.insns)) and gad.move >= move]
         sorted_match_list = sorted(match_list, key=lambda t:len("; ".join(t.insns)))
         if sorted_match_list:
             return sorted_match_list[0]
