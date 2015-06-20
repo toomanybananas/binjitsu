@@ -67,7 +67,6 @@ The stack is automatically adjusted for the next frame
     0x0034:              0x9 arg2
     0x0038:           'oaaa' <pad>
     0x003c:       0xfeedface exit()
-    0x0040:           'qaaa' <pad>
 
 ROP Example
 -------------------
@@ -119,13 +118,12 @@ Finally, let's build our ROP stack
     0x0010:              0x8 arg2
     0x0014:           'faaa' <pad>
     0x0018:       0x1000003c exit()
-    0x001c:           'haaa' <pad>
 
 The raw data from the ROP stack is available via `str`.
 
     >>> raw_rop = str(rop)
     >>> print enhex(raw_rop)
-    1f0000101b000010010000003300001008000000666161613c00001068616161
+    1f0000101b000010010000003300001008000000666161613c000010
 
 Let's try it out!
 
@@ -497,18 +495,18 @@ class ROP(object):
             For simple cases, the order doesn't matter.
             (Note: The display for OrderedDict is ugly, sorry!)
 
-            >>> setRegisters({'eax': 1})
-            OrderedDict([('eax', [1000, 1])])
-            OrderedDict([('eax', [1000], 8, [(0, 1)])])
+            >>> context.clear(arch='i386')
+            >>> binary = ELF.from_assembly('pop eax; ret; mov ebx, eax; ret; pop ecx; ret; mov edx, ebx; ret')
+            >>> rop = ROP(binary)
+            >>> rop.setRegisters({'eax': 1})
+            OrderedDict([('eax', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 1])])
             >>> setRegisters({'eax': 1, 'ecx': 0})
-            OrderedDict([('eax', [1000, 1]), ('ecx', [3000, 0])])
-            >>> setRegisters({'ebx': None})
-            OrderedDict([('ebx', [1000, None, 2000])])
+            OrderedDict([('eax', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 1]), ('ecx', [Gadget(0x10000005, [u'pop ecx', u'ret'], {'eip': M32(M32(esp+4), #4), 'esp': ['esp'], 'ecx': M32(M32(esp), #0)}, 0x8), 0])])
 
             For complex cases, there is only one possible ordering:
 
-            >>> setRegisters({'eax': 1, 'ebx': None})
-            OrderedDict([('ebx', [1000, None, 2000]), ('eax', [1000, 1])])
+            >>> setRegisters({'eax': 1, 'ebx': 2})
+            OrderedDict([('ebx', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 2, Gadget(0x10000002, [u'mov ebx, eax', u'ret'], {'eip': M32(M32(esp), #0), 'ebx': 'eax', 'esp': ['esp']}, 0x4)]), ('eax', [Gadget(0x10000000, [u'pop eax', u'ret'], {'eax': M32(M32(esp), #0), 'esp': ['esp'], 'eip': M32(M32(esp+4), #4)}, 0x8), 1])])
 
             Sometimes, it may not be possible/
 
@@ -1380,17 +1378,12 @@ class ROP(object):
             Gadget02 ==> 2000: mov ebx, eax; ret
             Gadget03 ==> 3000: pop ecx; ret
             Gadget04 ==> 4000: mov edx, ebx; ret
-            >>> gadgets = {
-                    1000: "pop eax; ret",
-                    2000: "mov ebx, eax; ret",
-                    3000: "pop ecx; ret",
-                    4000: "mov edx, ebx; ret"}
 
-            >>> build_graph(gadgets)
-            {1000: [2000], 
-             2000: [4000],
-             3000: [],
-             4000: []}
+            The gadget graph will looks like this:
+            {Gadget01: [Gadget02], 
+             Gadget02: [Gadget04],
+             Gadget03: [],
+             Gadget04: []}
         '''
         gadget_graph = {}
         for gad_1 in gadgets.values():

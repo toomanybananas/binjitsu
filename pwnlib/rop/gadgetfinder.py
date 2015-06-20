@@ -152,9 +152,11 @@ class GadgetClassifier(GadgetMapper):
             Gadget object with correct sp move value and regs relationship
 
         Example:
-            assume gadget_test = Gadget(address:0x1000, [u'pop rdi', u'ret'], {}, 0x0) 
-            >>> classify(gadget_test) 
-            Gadget(address:0x1000, [u'pop rdi', u'ret'], {"rdi":Mem(reg: "rsp", offset: 0, size:64)}, 0x10) 
+            >>> from capstone    import CS_ARCH_X86, CS_MODE_64
+            >>> gadget_to_be_classify = Gadget(0x1000, [u'pop rdi', u'ret'], {}, 0x0, "\x5f\xc3")
+            >>> gc = GadgetClassifier(CS_ARCH_X86, CS_MODE_64)
+            >>> gc.classify(gadget_to_be_classify) 
+            Gadget(0x1000, [u'pop rdi', u'ret'], {'rsp': ['rsp'], 'rdi': M64(M64(rsp), #0), 'rip': M64(M64(rsp+8), #8)}, 0x10)
         """
         address = gadget.address
         insns   = gadget.insns
@@ -642,7 +644,7 @@ class GadgetFinder(object):
 
         Example:
         
-            >>> gadgets = {
+            gadgets = {
                         "blx r3; pop {r4, pc}", "blx r2; pop {r4, r5, pc}",
                         "blx r5; pop {pc}", "blx r4; pop {r4, pc}",
                         "pop {r0, pc}", "pop {r0, r5, pc}",
@@ -650,7 +652,8 @@ class GadgetFinder(object):
                         "pop {r0, r1, r2, pc}", "pop {r0, r1, r2, r5, pc}",
                         "pop {r0, r1, r2, r3, pc}", "pop {r0, r1, r2, r3, r6, pc}",
                         }
-            >>> __simplify_arm(gadgets)
+
+            __simplify_arm(gadgets)
             {   "blx r3; pop {r4, pc}", 
                 "blx r5; pop {pc}",
                 "pop {r0, pc}",
