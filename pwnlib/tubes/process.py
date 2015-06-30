@@ -17,7 +17,9 @@ log = getLogger(__name__)
 
 PIPE = subprocess.PIPE
 STDOUT = subprocess.STDOUT
-PTY = object()
+
+class PTY(object): pass
+PTY=PTY()
 
 class process(tube):
     r"""
@@ -30,7 +32,7 @@ class process(tube):
             Set to `True` to interpret `argv` as a string
             to pass to the shell for interpretation instead of as argv.
         executable(str):
-            Path to the binary to execute.  If ``None``, uses ``argv[0]``.
+            Path t`o the binary to execute.  If ``None``, uses ``argv[0]``.
             Cannot be used with ``shell``.
         cwd(str):
             Working directory.  Uses the current working directory by default.
@@ -55,7 +57,7 @@ class process(tube):
 
     Examples:
 
-        >>> p = process(which('python2'))
+        >>> p = process('python2')
         >>> p.sendline("print 'Hello world'")
         >>> p.sendline("print 'Wow, such data'");
         >>> '' == p.recv(timeout=0.01)
@@ -102,9 +104,19 @@ class process(tube):
         >>> p.recvline()
         'hello\n'
 
-        >>> p = process(['python','-c','open("/dev/tty","wb").write("stack smashing detected")'])
-        >>> p.recv()
+        >>> stack_smashing = ['python','-c','open("/dev/tty","wb").write("stack smashing detected")']
+        >>> process(stack_smashing).recvall()
         'stack smashing detected'
+
+        >>> PIPE=subprocess.PIPE
+        >>> process(stack_smashing, stdout=PIPE, stderr=PIPE).recvall()
+        ''
+
+        >>> process('echo hello 1>&2', shell=True).recvall()
+        'hello\n'
+
+        >>> process('echo hello 1>&2', shell=True, stderr=PIPE).recvall()
+        ''
     """
 
     #: `subprocess.Popen` object
@@ -145,6 +157,8 @@ class process(tube):
         if not shell:
             executable, argv, env = self._validate(cwd, executable, argv, env)
 
+        self.pty          = (stdout == PTY)
+
         stdin, stdout, stderr, master = self._handles(stdin, stdout, stderr)
 
         self.executable   = self.program = executable
@@ -182,7 +196,8 @@ class process(tube):
         fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
     def preexec_fn(self):
-        self.__pty_make_controlling_tty(1)
+        if self.pty:
+            self.__pty_make_controlling_tty(1)
         self.preexec_user()
 
     @staticmethod

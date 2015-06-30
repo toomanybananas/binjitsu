@@ -40,7 +40,7 @@ setup_travis()
 
 setup_linux()
 {
-    sudo apt-get install -y software-properties-common openssh-server install libncurses5-dev libncursesw5-dev
+    sudo apt-get install -y software-properties-common openssh-server libncurses5-dev libncursesw5-dev
     sudo apt-add-repository --yes ppa:pwntools/binutils
     sudo apt-get update
     sudo apt-get install binutils-arm-linux-gnu binutils-mips-linux-gnu binutils-powerpc-linux-gnu
@@ -56,7 +56,8 @@ setup_osx()
 if [[ "$USER" == "travis" ]]; then
     setup_travis
 elif [[ "$USER" == "shippable" ]]; then
-    sudo apt-get install openssh-server
+    sudo apt-get update
+    sudo apt-get install openssh-server gcc-multilib
     sudo /usr/sbin/sshd -f /etc/ssh/sshd_config &
     setup_travis
 elif [[ "$(uname)" == "Darwin" ]]; then

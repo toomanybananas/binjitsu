@@ -34,8 +34,10 @@ Each of the ``binjitsu`` modules is documented here.
    constants
    context
    dynelf
+   encoders
    elf
    exception
+   fmtstr
    gdb
    log
    memleak
