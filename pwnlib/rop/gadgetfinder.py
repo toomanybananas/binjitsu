@@ -501,6 +501,9 @@ class GadgetFinder(object):
                     elif self.arch == self.capstone.CS_ARCH_ARM:
                         gg = self.__simplify_arm(gg)
 
+                temp = [self.classifier.classify(gadget) for gadget in gg]
+                gg = [ gadget for gadget in temp if gadget]
+
                 for gadget in gg:
                     out[gadget.address] = gadget
                 
@@ -566,8 +569,6 @@ class GadgetFinder(object):
                                     onegad = self.__filter_for_arm_big_binary(onegad)
 
                             insns_hashtable.append(insns_hash)
-                            if onegad:
-                                onegad = self.classifier.classify(onegad)
 
                             if onegad: 
                                 allgadgets += [onegad]
