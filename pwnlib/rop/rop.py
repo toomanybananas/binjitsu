@@ -596,8 +596,16 @@ class ROP(object):
             if not remain_regs:
                 break
 
-            if remain_regs & regs:
+            modified_regs = remain_regs & regs
+            if modified_regs:
                 path = ropgadgets[path_hash]
+
+                # If two or more regs source from same origin, 
+                # Nop and push back this gadget path
+                if self.check_same_origin(path, modified_regs):
+                    gadget_list[path_hash] = regs
+                    continue
+
                 result = self.handle_non_ret_branch(path, regs)
                 if not result:
                     continue
@@ -608,10 +616,10 @@ class ROP(object):
                 # If conditions'key in Gadget's registers.
                 # Handle this conflict.
                 for conflict_key in conditions.keys():
-                    if conflict_key in regs:
-                        regs.remove(conditions.keys()[0])
+                    if conflict_key in modified_regs:
+                        modified_regs.remove(conditions.keys()[0])
 
-                for reg in regs:
+                for reg in modified_regs:
                     reg64 = reg
 
                     # x64: rax, eax reg[-2:] == ax
@@ -628,12 +636,12 @@ class ROP(object):
                         if "call" == gadget.insns[-1].split()[0]:
                             sp -= self.align
                     sp, stack = self.check_ip_postion(path, conditions, (sp, stack))
-                    out.append(("_".join(regs), (path, sp, stack)))
+                    out.append(("_".join(modified_regs), (path, sp, stack)))
                 else:
                     continue
 
-                remain_regs -= (regs - used_regs)
-                used_regs |= regs
+                remain_regs -= modified_regs
+                used_regs |= modified_regs
 
                 if remain_regs:
                     gadget_list = re_order(gadget_list, remain_regs)
@@ -648,6 +656,19 @@ class ROP(object):
         ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
 
         return ordered_out
+
+    def check_same_origin(self, path, regs):
+        """Only check last gadget in path"""
+        last_gadget = path[-1]
+        sources = []
+        for reg in regs:
+            sources.append(last_gadget.regs[reg])
+
+        if len(set(sources)) < len(regs):
+            return True
+
+        return False
+
 
     def check_ip_postion(self, path, conditions, result):
         sp, stack = result

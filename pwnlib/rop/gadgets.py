@@ -121,3 +121,18 @@ class Mem(Persistent):
 
     def __setitem__(self, key, value):
         return setattr(self, key, value)
+
+    def __eq__(self, other):
+        """Return self == other
+        """
+        if type(other) is type(self):
+            same_reg    = self.reg      == other.reg
+            same_offset = self.offset   == other.offset
+            same_size   = self.size     == other.size
+
+            return same_reg and same_offset and same_size
+        else:
+            return False
+
+    def __hash__(self):
+        return hash((self.reg, self.offset, self.size))
