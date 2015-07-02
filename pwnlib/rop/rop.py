@@ -606,7 +606,7 @@ class ROP(object):
                     gadget_list[path_hash] = regs
                     continue
 
-                result = self.handle_non_ret_branch(path, regs)
+                result = self.handle_non_ret_branch(path)
                 if not result:
                     continue
 
@@ -630,7 +630,7 @@ class ROP(object):
                 result = self.Verify.verify_path(path, conditions)
                 if result:
                     sp, stack = result
-                    if return_to_stack_gadget:
+                    for return_to_stack_gadget in additional.values():
                         sp += return_to_stack_gadget.move
                     for gadget in path:
                         if "call" == gadget.insns[-1].split()[0]:
@@ -709,7 +709,7 @@ class ROP(object):
         return result["tail"]
 
 
-    def handle_non_ret_branch(self, path, regs):
+    def handle_non_ret_branch(self, path):
         """If last instruction is call xxx/jmp xxx, Handle this scenairo.
         """
         # Inital the result
@@ -719,14 +719,27 @@ class ROP(object):
         # This one for "bx lr"
         exception_operand = "lr"
 
+        front_path = []
+
         additional = {}
+
+        move = 0
+        for gadget in path:
+            instr = gadget.insns[-1].split()
+            mnemonic   = instr[0]
+            if mnemonic == self.CALL or mnemonic == self.JUMP:
+                if mnemonic == "call" and 8 > move:
+                    move = 8
+                elif 4 > move:
+                    move = 4
+
         for i in range(len(path)):
             gadget = path[i]
             instr = gadget.insns[-1].split()
             mnemonic   = instr[0]
             if mnemonic == self.CALL or (mnemonic == self.JUMP and instr[1] != exception_operand):
                 pc_reg = gadget.regs[self.PC]
-                return_to_stack_gadget = self.get_return_to_stack_gadget(mnemonic)
+                return_to_stack_gadget = self.get_return_to_stack_gadget(move=move)
                 if isinstance(pc_reg, Mem):
                     condition = {self.PC: return_to_stack_gadget.address}
 
@@ -734,7 +747,7 @@ class ROP(object):
                     condition = {pc_reg: return_to_stack_gadget.address}
 
                     if pc_reg in gadget.regs.keys() and isinstance(gadget.regs[pc_reg], Mem):
-                        return (path, return_to_stack_gadget, condition)
+                        continue
 
                     set_value_gadget = self.search_path("sp", [pc_reg])[0]
 
@@ -748,24 +761,29 @@ class ROP(object):
                     #       If set_value_gadget not the part of path[:i],
                     #       Then, simply insert the set_value_gadget before the last gadget in path.
                     #       Maybe some bugs here, need test cases.
-                    if len(set_value_gadget) == 1 and set_value_gadget[0] != gadget:
+
+                    # TODO: A problem, set_value_gadget may be overwrited by later's
+                    # `set_value_gadget[0] not in front_path` need more testcases
+                    if len(set_value_gadget) == 1 and set_value_gadget[0] not in front_path:
                         if path[:i] and set_value_gadget[0] != path[i-1]:
                             if not (set(path[i-1].regs.keys()) - set(set_value_gadget[0].regs.keys())):
-                                path = path[:i-1] + set_value_gadget + path[i:]
+                                front_path += path[:i-1] + set_value_gadget
                             else:
-                                path = path[:i] + set_value_gadget + path[i:]
+                                front_path += path[:i] + set_value_gadget
                         elif not path[:i]:
-                            path = set_value_gadget + path[i:]
+                            front_path += set_value_gadget
                     elif len(set_value_gadget) > 1:
                         if any([x!=y for x,y in zip(set_value_gadget[::-1], path[:i][::-1])]):
-                            path = path[:i] + set_value_gadget + path[i:]
+                            front_path += path[:i] + set_value_gadget
 
                     additional["; ".join(gadget.insns)] = return_to_stack_gadget
 
                 else:
                     return None
 
-        return (path, return_to_stack_gadget, condition, additional)
+            front_path += [gadget]
+
+        return (front_path, return_to_stack_gadget, condition, additional)
     
     def get_return_to_stack_gadget(self, mnemonic="", move=0):
         if mnemonic == "call":
@@ -814,16 +832,12 @@ class ROP(object):
                 gad_instr = "; ".join(gadget.insns)
                 additional = 0
                 if gad_instr in additional_conditions.keys():
-                    additional = additional_conditions[gad_instr].move - self.align
+                    additional = additional_conditions[gad_instr].move
 
-                IP_reg = gadget.regs[self.PC]
-                if isinstance(IP_reg, Mem):
-                    know[sp + IP_reg.offset + additional] = path[i+1]
-                else:
-                    know[sp + gadget.move + additional] = path[i+1]
+                # We assume that esp is next to eip, plus `self.align`
+                know[sp + gadget.move + additional - self.align] = path[i+1]
 
                 sp += gadget.move + additional
-
 
             ropgadget, _, stack_result = result
             outrop.append(ropgadget[0])
