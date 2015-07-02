@@ -435,6 +435,9 @@ class ROP(object):
         self.RET  = { "i386"    : "ret",
                       "amd64"   : "ret",
                       "arm"     : "pop"}[self.arch]
+        self.SP   = { "i386"    : "esp",
+                      "amd64"   : "rsp",
+                      "arm"     : "sp"}[self.arch]
 
     def __init_classify_and_solver(self):
         """
@@ -643,6 +646,7 @@ class ROP(object):
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
 
         ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
+        print ordered_out
 
         return ordered_out
 
@@ -1210,21 +1214,16 @@ class ROP(object):
         self._chain.append(value)
 
     def migrate(self, next_base):
-        """Explicitly set $sp, by using a ``leave; ret`` gadget"""
+        """A simple implementation for setting $sp"""
         if isinstance(next_base, ROP):
             next_base = self.base
-        pop_sp = self.rsp or self.esp
-        pop_bp = self.rbp or self.ebp
-        leave  = self.leave
-        if pop_sp and len(pop_sp.regs) == 1:
-            self.raw(pop_sp)
-            self.raw(next_base)
-        elif pop_bp and leave and len(pop_bp.regs) == 1:
-            self.raw(pop_bp)
-            self.raw(next_base - 4)
-            self.raw(leave)
-        else:
-            log.error('Cannot find the gadgets to migrate')
+
+        # TODO: hardcode self.align, only for `ret` and `pop {xx, pc}`
+        # Not suitable for ret imm16/call reg/jmp reg
+        condition = {self.SP : next_base + self.align}
+        result = self.setRegisters(condition)[self.SP]
+        for item in result:
+            self.raw(item)
         self.migrated = True
 
     def __str__(self):
