@@ -646,7 +646,6 @@ class ROP(object):
                       key=lambda t: self._top_sorted[::-1].index(t[1][0][-1])))
 
         ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
-        print ordered_out
 
         return ordered_out
 

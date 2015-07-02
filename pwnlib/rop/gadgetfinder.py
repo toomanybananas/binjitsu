@@ -744,7 +744,7 @@ class GadgetFinder(object):
     def __deduplicate(self, gadgets):
         new, insts = [], []
         for gadget in gadgets:
-            insns = "; ".join(gadget.insns) 
+            insns = hex(gadget.address) + ": " + "; ".join(gadget.insns) 
             if insns in insts:
                 continue
             insts.append(insns)
