@@ -688,10 +688,6 @@ class ROP(object):
         return result["tail"]
 
 
-    def add_func_head_for_arm_lr(self, target_address):
-        return None
-
-
     def handle_non_ret_branch(self, path, regs):
         """If last instruction is call xxx/jmp xxx, Handle this scenairo.
         """
