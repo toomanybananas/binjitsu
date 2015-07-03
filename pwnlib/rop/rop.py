@@ -722,7 +722,6 @@ class ROP(object):
         front_path = []
 
         additional = {}
-
         move = 0
         for gadget in path:
             instr = gadget.insns[-1].split()
@@ -765,23 +764,21 @@ class ROP(object):
                     # TODO: A problem, set_value_gadget may be overwrited by later's
                     # `set_value_gadget[0] not in front_path` need more testcases
                     if len(set_value_gadget) == 1 and set_value_gadget[0] not in front_path:
-                        if path[:i] and set_value_gadget[0] != path[i-1]:
-                            if not (set(path[i-1].regs.keys()) - set(set_value_gadget[0].regs.keys())):
-                                front_path += path[:i-1] + set_value_gadget
-                            else:
-                                front_path += path[:i] + set_value_gadget
-                        elif not path[:i]:
+                        if front_path and (not (set(front_path[-1].regs.keys()) - set(set_value_gadget[0].regs.keys()))):
+                            front_path = front_path[:-1] + set_value_gadget
+                        else:
                             front_path += set_value_gadget
                     elif len(set_value_gadget) > 1:
-                        if any([x!=y for x,y in zip(set_value_gadget[::-1], path[:i][::-1])]):
-                            front_path += path[:i] + set_value_gadget
+                        if any([x!=y for x,y in zip(set_value_gadget[::-1], front_path[:i][::-1])]):
+                            front_path += set_value_gadget
 
                     additional["; ".join(gadget.insns)] = return_to_stack_gadget
+                    front_path += [gadget]
 
                 else:
                     return None
-
-            front_path += [gadget]
+            else:
+                front_path += [gadget]
 
         return (front_path, return_to_stack_gadget, condition, additional)
     
