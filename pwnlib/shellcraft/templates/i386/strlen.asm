@@ -15,12 +15,13 @@ Example:
 
     >>> sc  = 'jmp get_str\n'
     >>> sc += 'pop_str: pop eax\n'
-    >>> sc += shellcraft.i386.strcpy('esp', 'eax')
-    >>> sc += shellcraft.i386.linux.write(1, 'esp', 32)
+    >>> sc += shellcraft.i386.strlen('eax')
+    >>> sc += 'push ecx;'
+    >>> sc += shellcraft.i386.linux.write(1, 'esp', 4)
     >>> sc += shellcraft.i386.linux.exit(0)
     >>> sc += 'get_str: call pop_str\n'
     >>> sc += '.asciz "Hello, world\\n"'
-    >>> run_assembly(sc).recvline()
+    >>> run_assembly(sc).unpack()
     'Hello, world\n'
 </%docstring>
 <%page args="string, reg='ecx'"/>
@@ -28,6 +29,7 @@ Example:
                'edi': string,
                'eax': 0})}
     repnz scas al, BYTE PTR [edi]
+    inc ecx
     inc ecx
     neg ecx
     ${mov(reg, 'ecx')}
