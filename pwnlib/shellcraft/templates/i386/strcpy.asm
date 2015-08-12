@@ -1,6 +1,6 @@
 <%
 from pwnlib.shellcraft import pretty, value, common, registers
-from pwnlib.shellcraft.i386 import mov, pushstr, setregs
+from pwnlib.shellcraft.i386 import mov, pushstr, setregs, strlen
 from pwnlib import constants
 %>
 <%docstring>
@@ -19,14 +19,10 @@ Example:
     'Hello, world\n'
 </%docstring>
 <%page args="dst, src"/>
-    ${setregs({'ecx': -1,
-               'edi': src,
-               'esi': dst,
-               'eax': 0})}
+    ${setregs({'esi': src,
+               'edi': dst})}
     push edi
-    repnz scas al, BYTE PTR [edi]
-    pop edi
-    xchg edi, esi
-    inc ecx
-    neg ecx
-    rep movs BYTE PTR [edi], BYTE PTR [esi]
+    ${strlen('esi')}
+    pop  edi
+    inc  ecx
+    rep  movs BYTE PTR [edi], BYTE PTR [esi]

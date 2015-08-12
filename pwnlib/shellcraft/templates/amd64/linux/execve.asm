@@ -24,7 +24,7 @@ Example:
     >>> io = run_assembly(sc)
     >>> io.recvall()
     'Hello, zerocool\n'
-    >>> io.poll()
+    >>> io.poll(True)
     3
 </%docstring>
 <%page args="path = '/bin///sh', argv=[], envp={}"/>
