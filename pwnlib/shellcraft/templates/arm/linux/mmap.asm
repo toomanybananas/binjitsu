@@ -2,7 +2,7 @@
 <%
     from pwnlib.shellcraft.arm.linux import syscall
 %>
-<%page args="addr, length, prot, flags, fd, offset"/>
+<%page args="addr, length, prot=7, flags=0x22, fd=-1, offset=0"/>
 <%docstring>
 Invokes the syscall mmap.  See 'man 2 mmap' for more information.
 
