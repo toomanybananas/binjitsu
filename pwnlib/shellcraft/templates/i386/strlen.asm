@@ -21,8 +21,8 @@ Example:
     >>> sc += shellcraft.i386.linux.exit(0)
     >>> sc += 'get_str: call pop_str\n'
     >>> sc += '.asciz "Hello, world\\n"'
-    >>> run_assembly(sc).unpack()
-    'Hello, world\n'
+    >>> run_assembly(sc).unpack() == len('Hello, world\n')
+    True
 </%docstring>
 <%page args="string, reg='ecx'"/>
     ${setregs({'ecx': -1,
