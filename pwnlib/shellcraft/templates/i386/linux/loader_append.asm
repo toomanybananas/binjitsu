@@ -17,15 +17,15 @@ Example:
     >>> gcc = process(['gcc','-m32','-xc','-static','-Wl,-Ttext-segment=0x20000000','-'])
     >>> gcc.write('''
     ... int main() {
-    ...     printf("Hello, %s!\\n", "world");
+    ...     printf("Hello, %s!\\n", "i386");
     ... }
     ... ''')
     >>> gcc.shutdown('send')
     >>> gcc.poll(True)
     0
     >>> sc = shellcraft.loader_append('a.out')
-    >>> run_assembly(sc).recvline()
-    'Hello, world!\n'
+    >>> run_assembly(sc).recvline() == 'Hello, i386!\n'
+    True
 
 </%docstring>
 <%page args="data = None"/>

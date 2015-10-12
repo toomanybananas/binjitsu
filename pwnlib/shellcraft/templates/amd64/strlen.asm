@@ -22,7 +22,7 @@ Example:
     >>> sc += 'get_str: call pop_str\n'
     >>> sc += '.asciz "Hello, world\\n"'
     >>> run_assembly(sc).unpack() == len('Hello, world\n')
-
+    True
 </%docstring>
 <%page args="string, reg='rcx'"/>
     ${setregs({'rcx': -1,
