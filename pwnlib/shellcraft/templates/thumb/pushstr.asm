@@ -20,7 +20,7 @@ on your version of binutils.
     ... '87ea070780b4dff8047001e0726c642180b4dff8047001e06f0a576f80b4dff8047001e048656c6c80b4',
     ... '87ea070780b4dff8067000f002b8726c642180b4dff8047000f002b86f0a576f80b4014f00f002b848656c6c80b4']
     True
-    >>> print shellcraft.pushstr('abc') #doctest: +ELLIPSIS
+    >>> print shellcraft.pushstr('abc').rstrip() #doctest: +ELLIPSIS
         /* push 'abc\x00' */
         ldr r7, value_...
         b value_..._after
