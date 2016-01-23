@@ -329,7 +329,12 @@ def sh_string(s):
     #        digits only the last two of which are used)
     #
     # tl;dr Dollar-Single Quotes are identical to repr()
-    dollar_quote_escaped='\n\r\t\\\'\"'
+    dollar_quote_escaped={'\n': '\\n',
+                          '\r': '\\r',
+                          '\t': '\\t',
+                          '\\': '\\\\',
+                          "\'": "\\'",
+                          "\"": '\\"'}
 
     if '\x00' in s:
         log.error("sh_string(): Cannot create a null-byte")
@@ -342,7 +347,7 @@ def sh_string(s):
         result = ''
         for c in s:
             if c in dollar_quote_escaped:
-                c = '\\' + c
+                c = dollar_quote_escaped[c]
             elif c not in string.printable:
                 c = '\\x%02x' % ord(c)
             result += c
