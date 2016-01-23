@@ -258,7 +258,17 @@ def mkdir_p(path):
             raise
 
 def sh_string(s):
-    """Outputs a string in a format that will be understood by /bin/sh.
+    r"""Outputs a string in a format that will be understood by /bin/sh on the
+    following platforms:
+
+    - Linux
+        - sh
+        - dash
+        - bash
+        - zsh
+    - FreeBSD
+        - sh
+        - bash
 
     If the string does not contain any bad characters, it will simply be
     returned, possibly with quotes. If it contains bad characters, it will
@@ -271,46 +281,73 @@ def sh_string(s):
         >>> print sh_string('foo bar')
         'foo bar'
         >>> print sh_string("foo'bar")
-        "foo'bar"
-        >>> print sh_string("foo\\\\bar")
-        'foo\\bar'
-        >>> print sh_string("foo\\\\'bar")
-        "foo\\\\'bar"
-        >>> print sh_string("foo\\x01'bar")
-        "$( (echo Zm9vASdiYXI=|(base64 -d||openssl enc -d -base64)||echo -en 'foo\\x01\\x27bar') 2>/dev/null)"
+        $'foo\'bar'
+        >>> print sh_string("foo\\bar")
+        'foo\bar'
+        >>> print sh_string("foo\\'bar")
+        $'foo\\\'bar'
+        >>> print sh_string("foo\x01'bar")
+        $'foo\x01\'bar'
         >>> print subprocess.check_output("echo -n " + sh_string("foo\\\\'bar"), shell = True)
         foo\\'bar
     """
 
-    very_good = set(string.ascii_letters + string.digits)
-    good      = (very_good | set(string.punctuation + ' ')) - set("'")
-    alt_good  = (very_good | set(string.punctuation + ' ')) - set('!')
+    # Quoting
+    #   Quoting is used to remove the special meaning of certain characters or
+    #   words to the shell, such as operators, whitespace, or keywords.  There
+    #   are three types of quoting: matched single quotes, matched double quotes,
+    #   and backslash.
+    #
+    # tl;dr All alphanumerics can be used unquoted.
+    unquoted = set(string.ascii_letters + string.digits + '_@%^=/?.,')
+
+    # Some punctuation can be used without quotes
+    unquoted |= set('%+,-./?@_~')
+
+    # Single Quotes
+    #     Enclosing characters in single quotes preserves the literal meaning
+    #     of all the characters (except single quotes, making it impossible
+    #     to put single-quotes in a single-quoted string).
+    #
+    # We prefer single quotes if possible.
+    single_quote = set(string.printable) - set("'")
+
+    # Dollar-Single Quotes
+    #     Enclosing characters between $' and ' preserves the literal mean-
+    #     ing of all characters except backslashes and single quotes.  A
+    #     backslash introduces a C-style escape sequence.
+    #...
+    #    \n      Newline
+    #    \r      Carriage return
+    #    \t      Horizontal tab
+    # ...
+    #    \\      Literal backslash
+    #    \'      Literal single-quote
+    #    \"      Literal double-quote
+    #...
+    #    \xnn    The byte whose hexadecimal value is nn (one or more
+    #        digits only the last two of which are used)
+    #
+    # tl;dr Dollar-Single Quotes are identical to repr()
+    dollar_quote_escaped='\n\r\t\\\'\"'
 
     if '\x00' in s:
         log.error("sh_string(): Cannot create a null-byte")
 
-    if all(c in very_good for c in s):
+    if set(s) < set(unquoted):
         return s
-    elif all(c in good for c in s):
+    elif set(s) < set(single_quote):
         return "'%s'" % s
-    elif all(c in alt_good for c in s):
-        fixed = ''
-        for c in s:
-            if c in '"\\$`':
-                fixed += '\\' + c
-            else:
-                fixed += c
-        return '"%s"' % fixed
     else:
-        fixed = ''
+        result = ''
         for c in s:
-            if c == '\\':
-                fixed += '\\\\'
-            elif c in good:
-                fixed += c
-            else:
-                fixed += '\\x%02x' % ord(c)
-        return '"$( (echo %s|(base64 -d||openssl enc -d -base64)||echo -en \'%s\') 2>/dev/null)"' % (base64.b64encode(s), fixed)
+            if c in dollar_quote_escaped:
+                c = '\\' + c
+            elif c not in string.printable:
+                c = '\\x%02x' % ord(c)
+            result += c
+
+        return "$'%s'" % result
 
 def dealarm_shell(tube):
     """Given a tube which is a shell, dealarm it.
