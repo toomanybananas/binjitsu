@@ -50,35 +50,58 @@ def debug_shellcode(data, execute=None, vma=None):
     return debug(tmp_elf, execute=execute, arch=context.arch)
 
 @LocalContext
-def debug(args, execute=None, exe=None, ssh=None, env=None):
+def debug(args, execute=None, exe=None, ssh=None, env=None, local=False):
     """debug(args) -> tube
 
     Launch a GDB server with the specified command line,
     and launches GDB to attach to it.
 
     Arguments:
-        args: Same args as passed to pwnlib.tubes.process
-        ssh: Remote ssh session to use to launch the process.
+        args(str,list): Same args as passed to pwnlib.tubes.process
+        execute(str): Script to execute when GDB is launched.
+        exe(str): Path to the executable to launch (e.g. if argv0 is something else)
+        env(dict): Set the environment of the launched process
+        ssh(pwnlib.tubes.ssh.ssh): Remote ssh session to use to launch the process.
           Automatically sets up port forwarding so that gdb runs locally.
+          Requires ``gdbserver`` to be installed on the target machine, or in the
+          working directory.
+        local(bool): If ``ssh`` is provided, use the local gdb instead of
+          the one on the remote machine.  This will be much slower, since instead of
+          just the GDB's text output, all of the process memory must go over the
+          network.
 
     Returns:
         A tube connected to the target process
     """
+
+    #
+    # If the user has disabled debugging for this execution, don't attach the debugger.
+    #
     if context.noptrace:
         log.warn_once("Skipping debugger since context.noptrace==True")
         return tubes.process.process(args, executable=exe, env=env)
 
+    #
+    # If the process is already running, the user has used the wrong API.
+    #
     if isinstance(args, (int, tubes.process.process, tubes.ssh.ssh_channel)):
         log.error("Use gdb.attach() to debug a running process")
 
-    if env is None:
-        env = os.environ
-
+    #
+    # If a single command was provided, turn it into argv.
+    #
     if isinstance(args, (str, unicode)):
         args = [args]
 
-    orig_args = args
+    #
+    # Since we are going to modify the command line by prepending gdbserver
+    # and arguments to it, we should save off a copy.
+    #
+    orig_args = list(args)
 
+    #
+    # If the user provided an SSH session, we need to spawn the process on the remote system.
+    #
     if ssh:
         runner  = ssh.process
         which   = ssh.which
@@ -86,52 +109,114 @@ def debug(args, execute=None, exe=None, ssh=None, env=None):
         runner  = tubes.process.process
         which   = misc.which
 
+    #
+    # If we are cross-debugging, we invoke qemu-user directly rather than letting
+    # the binfmt_misc do it automatically.  This allows us to set the `-g` flag to
+    # start QEMU's internal GDB server.
+    #
+    # Otherwise, just spin up gdbserver.
+    #
     if ssh or context.native:
         gdbserver = which('gdbserver')
 
         if not gdbserver:
             log.error("gdbserver is not installed")
 
-        orig_args = args
-
         args = [gdbserver]
+
         if context.aslr:
             args += ['--no-disable-randomization']
-        args += ['localhost:0']
+
+        args += ['localhost:0', '--']
         args += orig_args
     else:
         qemu_port = random.randint(1024, 65535)
-        args = [get_qemu_user(), '-g', str(qemu_port)] + args
+        args = [get_qemu_user(), '-g', str(qemu_port), '--'] + args
 
-    # Make sure gdbserver is installed
+    #
+    # Make sure gdbserver (or qemu-XXX) exist on the target machine.
+    #
     if not which(args[0]):
-        log.error("%s is not installed" % args[0])
+        message = "%s is not installed" % args[0]
 
+        if ssh:
+            message = "%s (on %s)" % (message, message.host)
+
+        log.error(message)
+
+    #
+    # Ideally we know the full path to the binary.
+    #
+    if not exe:
+        exe = which(orig_args[0])
+
+    #
+    # Spawn gdbserver (or QEMU) on the target machine.
+    #
     gdbserver = runner(args, executable=exe, env=env)
 
-    if context.native:
+    #
+    # Grab the port the debugger is listening on, and the PID of the child.
+    #
+    if ssh or context.native:
         # Process /bin/bash created; pid = 14366
         # Listening on port 34816
-        process_created = gdbserver.recvline()
-        gdbserver.pid   = int(process_created.split()[-1], 0)
-        gdbserver.executable = which(orig_args[0])
-        listening_on    = gdbserver.recvline()
+        pattern = r'Process (?P<exe>.+) created; pid = (?P<pid>.+)\n'
+        string  = gdbserver.recvline()
+        match   = re.search(pattern, string)
+        gdbserver.pid   = int(match.group('pid'))
+        gdbserver.executable = int(match.group('exe'))
 
-        port = int(listening_on.split()[-1])
+        pattern = r'Listening on port (?P<port>\d+)'
+        string  = gdbserver.recvline()
+        match   = re.search(pattern, string)
+
+        port = int(match.group('port'))
     else:
         port = qemu_port
 
     listener = remote = None
 
+    #
+    # If the target is running on a remote system, we need to proxy some data.
+    #
     if ssh:
-        remote   = ssh.connect_remote('127.0.0.1', port)
-        listener = tubes.listen.listen(0)
-        port     = listener.lport
-    elif not exe:
-        exe = misc.which(orig_args[0])
+        #
+        # Both gdb and gdbserver are running on the remote server
+        # We need to proxy the gdb text input/output.
+        #
+        # The manner in which we do this underneath is to spawn a new, external
+        # instance of SSH, which launches GDB on the remote server with the
+        # correct arguments (see gdb.attach implementation for more info).
+        #
+        if not local:
+            remote   = ssh.remote('127.0.0.1', port)
+            listener = tubes.listen.listen()
+            port     = listener.lport
 
-    attach(('127.0.0.1', port), exe=orig_args[0], execute=execute, need_ptrace_scope = False)
+        #
+        # gdb runs locally, gdbserver runs on the remote server
+        # We need to proxy gdb's remote debugging protocol.
+        #
+        # We just launch GDB locally and use 'target remote FOO' after setting
+        # up the proxy channel.
+        #
+        else:
+            remote   = ssh.remote('127.0.0.1', port)
 
+    #
+    # Now we simply "attach" to gdbserver / qemu listening port on localhost
+    # (which is just proxied if ssh is used.)
+    #
+    attach(('127.0.0.1', port),
+           exe=exe,
+           execute=execute,
+           need_ptrace_scope = False,
+           remote_gdbserver = local)
+
+    #
+    # Actually proxy the data after the connection arrives, if ssh is being used.
+    #
     if ssh:
         remote <> listener.wait_for_connection()
 
@@ -139,7 +224,12 @@ def debug(args, execute=None, exe=None, ssh=None, env=None):
         remote.level = 'error'
         listener.level = 'error'
 
-    # gdbserver outputs a message when a client connects
+    #
+    # gdbserver outputs a message when a client connects, which we don't want
+    # the user to see.
+    #
+    # Consume that line if it looks like what we expect.
+    #
     garbage = gdbserver.recvline(timeout=1)
 
     if "Remote debugging from host" not in garbage:
@@ -158,7 +248,7 @@ def get_gdb_arch():
 
 
 @LocalContext
-def attach(target, execute = None, exe = None, need_ptrace_scope = True):
+def attach(target, execute = None, exe = None, need_ptrace_scope = True, remote_gdbserver =None):
     """attach(target, execute = None, exe = None, arch = None) -> None
 
     Start GDB in a new terminal and attach to `target`.
@@ -183,25 +273,38 @@ def attach(target, execute = None, exe = None, need_ptrace_scope = True):
 
     Returns:
       :const:`None`
-"""
+    """
+
+    #
+    # If the user has disabled debugging for this execution, don't attach the debugger.
+    #
     if context.noptrace:
-        log.warn_once("Skipping debug attach since context.noptrace==True")
-        return
+        log.warn_once("Skipping debugger since context.noptrace==True")
+        return tubes.process.process(args, executable=exe, env=env)
 
-    # if execute is a file object, then read it; we probably need to run some
-    # more gdb script anyway
-    if execute:
-        if isinstance(execute, file):
-            fd = execute
+    #
+    # If execute is a file object, then read it; we probably need to run some
+    # more gdb script anyway.
+    #
+    if execute and isinstance(execute, file):
+        with execute as fd:
             execute = fd.read()
-            fd.close()
 
-    # enable gdb.attach(p, 'continue')
+    #
+    # There must be a newline at the end of the script, or the last command will
+    # not be executed.
+    #
     if execute and not execute.endswith('\n'):
         execute += '\n'
 
-    # gdb script to run before `execute`
+    #
+    # Prepare our own GDB script to run before the user's `execute` script.
     pre = ''
+
+    #
+    # If we are cross-debugging, the user must have installed a cross-debugging-aware
+    # GDB, and we must inform GDB what architecture to expect, because QEMU is stupid.
+    #
     if not context.native:
         if not misc.which('gdb-multiarch'):
             log.warn_once('Cross-architecture debugging usually requires gdb-multiarch\n' \
@@ -209,11 +312,15 @@ def attach(target, execute = None, exe = None, need_ptrace_scope = True):
         pre += 'set endian %s\n' % context.endian
         pre += 'set architecture %s\n' % get_gdb_arch()
         # pre += 'set gnutarget ' + _bfdname() + '\n'
+
+    #
+    # If ptrace_scope is set and we're not root, we cannot attach to a
+    # running process.
+    #
+    # We assume that we do not need this to be set if we are debugging on
+    # a different architecture (e.g. under qemu-user).
+    #
     else:
-        # If ptrace_scope is set and we're not root, we cannot attach to a
-        # running process.
-        # We assume that we do not need this to be set if we are debugging on
-        # a different architecture (e.g. under qemu-user).
         try:
             ptrace_scope = open('/proc/sys/kernel/yama/ptrace_scope').read().strip()
             if need_ptrace_scope and ptrace_scope != '0' and os.geteuid() != 0:
@@ -224,7 +331,9 @@ def attach(target, execute = None, exe = None, need_ptrace_scope = True):
         except IOError:
             pass
 
-    # let's see if we can find a pid to attach to
+    #
+    # Determine which PID we are attaching to, if any.
+    #
     pid = None
     if   isinstance(target, (int, long)):
         # target is a pid, easy peasy
@@ -237,24 +346,38 @@ def attach(target, execute = None, exe = None, need_ptrace_scope = True):
         pid = pids[0]
         log.info('attaching you youngest process "%s" (PID = %d)' %
                  (target, pid))
+
+    #
+    # We are attaching to a running process on a remote system.
+    #
     elif isinstance(target, tubes.ssh.ssh_channel):
+
         if not target.pid:
             log.error("PID unknown for channel")
 
+        # The 'parent' object on a 'ssh_channel' object is the SSH session, so that
+        # we can run commands on the target machine.
         shell = target.parent
+
+        # We're going to use the local GDB
+        if local:
+            shell.process(['gdbserver','127.0.0.1:0'])
+        else:
+            cmd = ['ssh', '-C', '-t', '-p', str(shell.port), '-l', shell.user, shell.host]
 
         tmpfile = shell.mktemp()
         shell.upload_data(execute or '', tmpfile)
 
-        cmd = ['ssh', '-C', '-t', '-p', str(shell.port), '-l', shell.user, shell.host]
         if shell.password:
             cmd = ['sshpass', '-p', shell.password] + cmd
+
         if shell.keyfile:
             cmd += ['-i', shell.keyfile]
-        cmd += ['gdb %r %s -x "%s" ; rm "%s"' % (target.executable,
-                                                 target.pid,
-                                                 tmpfile,
-                                                 tmpfile)]
+
+            cmd += ['gdb %r %s -x "%s" ; rm "%s"' % (target.executable,
+                                                     target.pid,
+                                                     tmpfile,
+                                                     tmpfile)]
 
         misc.run_in_new_terminal(' '.join(cmd))
         return

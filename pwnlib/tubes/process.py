@@ -745,6 +745,7 @@ class process(tube):
             import pwnlib.elf.corefile
             return pwnlib.elf.corefile.Core(filename)
 
+<<<<<<< Updated upstream
     def leak(self, address, count=0):
         """Leaks memory within the process at the specified address.
 
@@ -759,4 +760,11 @@ class process(tube):
         with open('/proc/%i/mem' % self.pid, 'rb') as mem:
             mem.seek(address)
             return mem.read(count) or None
+=======
+    @property
+    def leak(self, address):
+        with open('/proc/%i/mem') as mem:
+            mem.seek(offset)
+            mem.read()
+>>>>>>> Stashed changes
 
