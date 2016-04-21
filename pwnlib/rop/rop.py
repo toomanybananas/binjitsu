@@ -425,10 +425,21 @@ class ROP(object):
         reg_order = collections.OrderedDict()
 
         for reg, value in registers.items():
-            gadget = self.find_gadget(['pop ' + reg, 'ret'])
+            # handle gadgets such of the form 'pop; pop; ret'
+            gadget = self.search(0, [reg])
             if not gadget:
                 log.error("can't set %r" % reg)
-            reg_order[reg] = [gadget, value]
+            reg_o = [gadget, value]
+
+            # if the gadget modifies more than one register, we have to make
+            # sure we aren't corrupting our previously changed registers
+            if len(gadget.regs) != 1:
+                for i in range(1, len(gadget.regs)):
+                    if gadget.regs[i] in registers:
+                        reg_o.append(registers[gadget.regs[i]])
+                    else:
+                        reg_o.append(0) # we don't care bout the value
+            reg_order[reg] = reg_o
 
         return reg_order
 
