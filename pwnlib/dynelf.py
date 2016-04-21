@@ -169,6 +169,7 @@ class DynELF(object):
         if not isinstance(leak, MemLeak):
             leak = MemLeak(leak)
 
+        self.elf     = elf
         self.leak    = leak
         self.libbase = self._find_base(pointer or elf.address)
 
@@ -256,6 +257,19 @@ class DynELF(object):
 
         ptr &= page_mask
         w = None
+
+        # If we have an ELF< we can probably speed this up a little bit?
+        if self.elf and self.leak.n(ptr, 32):
+            attempt = self.leak.n(ptr, 32)
+
+            for candidate in self.elf.search(attempt):
+                # Page aligned?
+                if candidate & 0xfff != 0:
+                    continue
+
+                candidate -= self.elf.address
+                ptr       -= candidate
+                break
 
         while True:
             if self.leak.b(ptr) == 0x7f and self.leak.n(ptr+1,3) == 'ELF':
@@ -482,7 +496,7 @@ class DynELF(object):
         if symb and lib:
             pretty = '%r in %r' % (symb, lib)
         else:
-            pretty = symb or lib
+            pretty = repr(symb or lib)
 
         if not pretty:
             self.failure("Must specify a library or symbol")
@@ -493,7 +507,7 @@ class DynELF(object):
         # If we are loading from a different library, create
         # a DynELF instance for it.
         #
-        if lib: dynlib = self._dynamic_load_dynelf(lib)
+        if lib is not None: dynlib = self._dynamic_load_dynelf(lib)
         else:   dynlib = self
 
         if dynlib is None:
@@ -541,11 +555,18 @@ class DynELF(object):
             LinkMap = {32: elf.Elf32_Link_Map, 64: elf.Elf64_Link_Map}[self.elfclass]
 
             cur = self.link_map
+
+            # make sure we rewind to the beginning!
+            while leak.field(cur, LinkMap.l_prev):
+                cur = leak.field(cur, LinkMap.l_prev)
+
             while cur:
                 p_name = leak.field(cur, LinkMap.l_name)
                 name   = leak.s(p_name)
                 addr   = leak.field(cur, LinkMap.l_addr)
                 cur    = leak.field(cur, LinkMap.l_next)
+
+                log.debug('Found %r @ %#x' % (name, addr))
 
                 self._bases[name] = addr
 
@@ -566,6 +587,10 @@ class DynELF(object):
         leak    = self.leak
         LinkMap = {32: elf.Elf32_Link_Map, 64: elf.Elf64_Link_Map}[self.elfclass]
 
+        # make sure we rewind to the beginning!
+        while leak.field(cur, LinkMap.l_prev):
+            cur = leak.field(cur, LinkMap.l_prev)
+
         while cur:
             self.status("link_map entry %#x" % cur)
             p_name = leak.field(cur, LinkMap.l_name)
@@ -584,7 +609,7 @@ class DynELF(object):
 
         libbase = leak.field(cur, LinkMap.l_addr)
 
-        self.status("Resolved library at %#x" % libbase)
+        self.status("Resolved library %r at %#x" % (libname, libbase))
 
         lib = DynELF(leak, libbase)
         lib._dynamic = leak.field(cur, LinkMap.l_ld)
@@ -776,9 +801,35 @@ class DynELF(object):
             libbase = self.lookup(symb = None, lib = lib)
 
         if not libbase:
+            self.status("Couldn't find libc base")
             return None
 
         for offset in libcdb.get_build_id_offsets():
             address = libbase + offset
             if self.leak.d(address + 0xC) == unpack("GNU\x00", 32):
                 return enhex(''.join(self.leak.raw(address + 0x10, 20)))
+            else:
+                self.status("Magic did not match")
+                import pdb
+                pdb.set_trace()
+                pass
+
+    def stack(self):
+        """Finds a pointer to the stack via __environ, which is an exported
+        symbol in libc, which points to the environment block.
+        """
+        symbols = ['environ', '_environ', '__environ']
+
+        for symbol in symbols:
+            environ = self.lookup(symbol, 'libc')
+
+            if environ:
+                break
+        else:
+            log.error("Could not find the stack")
+
+        stack = self.leak.p(environ)
+
+        self.success('*environ: %#x' % stack)
+
+        return stack

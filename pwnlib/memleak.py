@@ -1,3 +1,4 @@
+from .context import context
 from .log import getLogger
 from .util.packing import pack
 from .util.packing import unpack
@@ -241,6 +242,13 @@ class MemLeak(object):
         """
         return self._b(addr, ndx, 8)
 
+    def p(self, addr, ndx = 0):
+        """p(addr, ndx = 0) -> int
+
+        Leak a pointer-width value at ``((void**) addr)[ndx]``
+        """
+        return self._b(addr, ndx, context.bytes)
+
     def s(self, addr):
         r"""s(addr) -> str
 
@@ -465,3 +473,9 @@ class MemLeak(object):
             log.error("Cannot perform unbounded leaks")
 
         return self.n(start, stop-start)[::step]
+
+    def compare(self, address, bytes):
+        for i, byte in enumerate(bytes):
+            if self.n(address + i, 1) != byte:
+                return False
+        return True

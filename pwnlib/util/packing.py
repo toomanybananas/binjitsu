@@ -584,14 +584,14 @@ def fit(pieces, **kwargs):
       >>> fit({12: 0x41414141,
       ...      24: 'Hello',
       ...     })
-      'aaaabaaacaaaAAAAdaaaeaaaHello'
+      'aaaabaaacaaaAAAAeaaafaaaHello'
       >>> fit({'caaa': ''})
       'aaaabaaa'
       >>> fit({12: 'XXXX'}, filler = 'AB', length = 20)
       'ABABABABABABXXXXABAB'
       >>> fit({ 8: [0x41414141, 0x42424242],
       ...      20: 'CCCC'})
-      'aaaabaaaAAAABBBBcaaaCCCC'
+      'aaaabaaaAAAABBBBeaaaCCCC'
 
     """
     # HACK: To avoid circular imports we need to delay the import of `cyclic`
@@ -611,6 +611,12 @@ def fit(pieces, **kwargs):
     filler = iters.cycle(filler)
     out = ''
 
+    if not length and not pieces:
+        return ''
+
+    if not pieces:
+        return ''.join(filler.next() for f in range(length))
+
     # convert str keys to offsets
     pieces_ = dict()
     for k, v in pieces.items():
@@ -625,6 +631,15 @@ def fit(pieces, **kwargs):
         pieces_[k] = v
     pieces = pieces_
 
+    # convert values to their flattened forms
+    for k,v in pieces.items():
+        pieces[k] = _flat([v], preprocessor, packer)
+
+    # if we were provided a length, make sure everything fits
+    last = max(pieces)
+    if length and last and (last + len(pieces[last]) > length):
+        raise ValueError("fit(): Pieces do not fit within `length` (= %d) bytes" % length)
+
     # insert data into output
     out = list(out)
     l = 0
@@ -635,6 +650,11 @@ def fit(pieces, **kwargs):
             out.append(filler.next())
         v = _flat([v], preprocessor, packer)
         l = k + len(v)
+
+        # consume the filler for each byte of actual data
+        for i in range(len(out), l):
+            filler.next()
+
         out[k:l] = v
 
     # truncate/pad output
